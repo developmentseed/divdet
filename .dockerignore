@@ -1,0 +1,8 @@
+.git
+.circleci
+aws
+data
+katib
+test
+*.tar.gz
+*.zip

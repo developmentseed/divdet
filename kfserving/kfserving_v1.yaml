@@ -1,0 +1,19 @@
+apiVersion: "serving.kubeflow.org/v1alpha2"
+kind: "InferenceService"
+metadata:
+  name: "tensorflow-gpu"
+  namespace: kubeflow
+  annotations:
+    "serving.kubeflow.org/gke-accelerator": "nvidia-tesla-p100"
+spec:
+  default:
+    predictor:
+      tensorflow:
+        storageUri: "gs://divot-detect/model_export/divot_detect_v1"
+        serviceAccountName: kf-user
+        runtimeVersion: "1.11.0-gpu"
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+        nodeSelector:
+          cloud.google.com/gke-accelerator: nvidia-tesla-p100
