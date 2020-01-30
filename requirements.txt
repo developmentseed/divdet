@@ -2,5 +2,5 @@ rasterio
 numpy
 tqdm
 scikit-image
-absl
-tensorflow==1.15
+absl-py
+tensorflow==1.15.2
