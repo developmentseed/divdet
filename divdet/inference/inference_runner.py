@@ -11,6 +11,7 @@ import base64
 import json
 import requests
 import tempfile
+from io import BytesIO
 
 import tensorflow as tf
 from tqdm import tqdm
@@ -18,11 +19,12 @@ from google.cloud import pubsub
 #TODO: switch to rasterio if possible
 from skimage.transform import downscale_local_mean
 from skimage.io import imsave
+from PIL import Image
 import rasterio
 from absl import app, logging, flags
 
 from divdet.utils_inference import (iter_grouper, get_slice_bounds,
-                                    yield_windowed_reads)
+                                    yield_windowed_reads_numpy)
 from divdet.surface_feature import SurfaceFeature
 
 flags.DEFINE_string('project_id', None, 'Google cloud project ID.')
@@ -97,6 +99,21 @@ def download_url_to_file(url, directory='/tmp', clobber=False, repeat_tries=5,
             logging.info(f'Too many repeats, stopping on {url}')
 
 
+def arr_to_b64(numpy_arr):
+    """Convert a numpy array into a b64 string"""
+
+    # Generate image in bytes format; will convert using `tobytes` if not contiguous
+    image_pil = Image.fromarray(numpy_arr)
+    byte_io = BytesIO()
+    image_pil.save(byte_io, format="PNG")
+
+    #  Convert to base64; uses web-safe encoding
+    b64_image = base64.urlsafe_b64encode(byte_io.getvalue()).decode("utf-8")
+    byte_io.close()
+
+    return b64_image
+
+
 def pred_generator(generator, endpoint, batch_size=1):
     """Send a data from a generator to an inference endpoint"""
 
@@ -108,16 +125,16 @@ def pred_generator(generator, endpoint, batch_size=1):
         instances = []  # List that will hold b64 images to be sent to endpoint
 
         for image_dict in image_batch:
-            b64_image = base64.b64encode(image_dict.pop('image_data'))
+            b64_image = arr_to_b64(image_dict.pop('image_data'))
             pred_batch.append(image_dict)
 
             #XXX KF Serving example here:
             #    https://github.com/kubeflow/kfserving/blob/master/docs/samples/tensorflow/input.json
-            instances.append({'b64': b64_image.decode('utf-8')})
+            instances.append({'b64': b64_image})
 
         ################
         # Run prediction
-        
+
         payload = json.dumps({"instances": instances})
         resp = requests.post(endpoint, data=payload)
         preds = json.loads(resp.content)['predictions']
@@ -147,7 +164,7 @@ def proc_message(message, database_uri, endpoint, batch_size):
     ###########################
     #image_r = requests.get(message.image_url)
     #proj_r = requests.get(message.projection_url)
-    
+
     # Use temp directory so everything is deleted after image processing completes
     with tempfile.TemporaryDirectory() as tmp_dir:
         ##############################################
@@ -162,48 +179,45 @@ def proc_message(message, database_uri, endpoint, batch_size):
         logging.info('Download complete.')
 
         if message.center_reproject:
-            image_fpath = op.join(op.splitext(image_fpath_orig)[0] + '_warp', 
-                                  op.splitext(image_fpath_orig[1]))
+            image_fpath = op.join(op.splitext(image_fpath_orig)[0] + '_warp',
+                                  op.splitext(image_fpath_orig)[1])
             logging.info(f'Reprojecting image and saving to {image_fpath}.')
 
             with rasterio.open(image_fpath_orig) as temp_img:
-                center_lat = src_orig.lnglat()[1]  # Raster center
+                center_lat = temp_img.lnglat()[1]  # Raster center
             eqc_proj = f'+proj=eqc +lat_ts={center_lat} +lat_0=0 +lon_0=180 +x_0=0 +y_0=0 +a=3396190 +b=3396190 +units=m +no_defs'
-            gdal.Warp(image_fpath, image_fpath_orig, dstSRS=srs)
+            gdal.Warp(image_fpath, image_fpath_orig, dstSRS=eqc_proj)
             logging.info('Reprojection complete.')
 
         else:
             image_fpath = image_fpath_orig
 
-        #########################################################
-        # Slice image appropriately and pass to KFServing cluster
-        #########################################################
+        ###########################################################
+        # Slice image appropriately and pass to prediction endpoint
+        ###########################################################
         preds = []
-        dataset = rasterio.open(image_fpath)
-        image = dataset.read(1)
+        with rasterio.open(image_fpath) as dataset:
+            image = dataset.read(1)
 
-        for scale in message.scales:
-            logging.info('Processing at downscale {scale}')
+            for scale in message['scales']:
+                print('Processing at downscale {scale}')
 
-            # Rescale image, round, and convert back to orig datatype
-            scaled_image = downscale_local_mean(
-                image, (scale, scale)).round().astype(image.dtype)
-            image_size = (scaled_image.shape[1], scaled_image.shape[0])
+                # Rescale image, round, and convert back to orig datatype
+                scaled_image = downscale_local_mean(
+                    image, (scale, scale)).round().astype(image.dtype)
 
-            # Calculate slice bounds and create generator
-            slice_bounds = get_slice_bounds(
-                image_size, slice_size=message.get_attr('window_size'),
-                min_window_overlap=message.get_attr('min_window_overlap'))
+                # Calculate slice bounds and create generator
+                slice_bounds = get_slice_bounds(
+                    scaled_image.shape, slice_size=message.get('window_size'),
+                    min_window_overlap=message.get('min_window_overlap'))
+                slice_gen = yield_windowed_reads_numpy(scaled_image, slice_bounds)
 
-            rasterio_img = rasterio.open(temp_image_r)
-            slice_gen = yield_windowed_reads(scaled_image, slice_bounds)
+                # Calculate slice bounds and create generator
+                pred_gen = pred_generator(slice_gen, message.get('endpoint'),
+                                          message.get('batch_size'))
 
-            # Calculate slice bounds and create generator
-            pred_gen = pred_generator(slice_gen, endpoint, batch_size)
+                preds.extend(list(pred_gen))
 
-            preds.extend(list(pred_gen))
-
-        dataset.close()
     ###########################
     # Run non-max suppression to remove duplicates within one image
     selected_inds = tf.image.non_max_suppression(boxes, scores,
