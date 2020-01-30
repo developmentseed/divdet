@@ -71,7 +71,7 @@ def get_slice_bounds(image_size, slice_size=(1024, 1024),
     return slice_coords
 
 
-def yield_windowed_reads(tif, slice_coords):
+def yield_windowed_reads_rasterio(tif, slice_coords):
     """Make a series of windowed reads via generator
 
     Parameters
@@ -86,6 +86,35 @@ def yield_windowed_reads(tif, slice_coords):
     for (x_pt, y_pt, width, height) in tqdm(slice_coords):
         # Rasterio works in `xy` coords, not `ij`
         yield tif.read(1, window=Window(y_pt, x_pt, width, height))
+
+
+def yield_windowed_reads_numpy(arr, slice_coords):
+    """Make a series of windowed reads via generator
+
+    Parameters
+    ----------
+    arr: np.ndarray
+    slice_coords: list
+        List of (x, y, width, height) rows in pixel coords to make windowed
+        reads.
+    """
+
+    # Yield all windows
+    for (row, col, height, width) in tqdm(slice_coords):
+
+        # Make sure we're dealing with ints
+        row, col = int(np.round(row)), int(np.round(col))
+        height, width = int(np.round(height)), int(np.round(width))
+
+        # Slice array
+        sub_arr = arr[row:row + height, col:col + width, ...]
+
+        if sub_arr.shape[:2] != (height, width):
+            sub_arr = np.pad(sub_arr, (height, width))
+
+        # Create a contiguous array (necessary for b64 encoding)
+        #yield dict(image_data=np.ascontiguousarray(sub_arr), row=row, col=col,
+        yield dict(image_data=sub_arr, row=row, col=col, height=height, width=width)
 
 
 def non_max_suppression(bboxes, overlap_thresh=0.4):
@@ -171,6 +200,10 @@ def poly_non_max_suppression(polys, confidences, overlap_thresh=0.4, multi_proc_
     -------
     picks: list of int
         Good indices to keep in polys list.
+
+    Notes
+    -----
+    Consider using TensorFlows built in non-max suppression functionality.
     """
 
     # Error check for no inputs
@@ -212,52 +245,6 @@ def poly_iou(poly1, poly2, thresh=None):
         return (intersection / union) >= thresh
 
     return intersection / union
-
-
-def run_darknet_test(dir_darknet, fpath_data_cfg, fpath_model_cfg,
-                     fpath_weights, fpath_images, thresh=0.4):
-    """Execute prediction using darknet.
-
-    Parameters
-    ----------
-    dir_darknet: str
-        Directory of darknet codebase
-    fpath_data_cfg: str
-        Data configuration file for YOLO
-    fpath_model_cfg: str
-        Model configuration file for YOLO
-    fpath_weights: str
-        Model weights for YOLO
-    fpath_images: str
-        Text file containing file paths to all images for inference
-    thresh: float
-        Confidence threshold to include a prediction
-    """
-
-    p_files = subprocess.Popen(['cat', '--squeeze-blank', fpath_images], stdout=subprocess.PIPE,
-                               shell=False)
-    p_darknet = subprocess.Popen([op.join(dir_darknet, 'darknet'), 'detector', 'test', fpath_data_cfg, fpath_model_cfg,
-         fpath_weights, '-thresh', str(thresh), '-save_labels', '-dont_show',
-         '-ext_output'], stdin=p_files.stdout, stdout=subprocess.PIPE, shell=False, cwd=dir_darknet)
-
-    p_files.stdout.close()
-    return p_darknet.communicate()[0]
-
-    '''
-    # Compile command
-    run(['cd', dir_darknet])
-    run([op.join(dir_darknet, 'darknet'), 'detector', 'test', fpath_data_cfg, fpath_model_cfg,
-         fpath_weights, '-thresh', str(thresh), '-save_labels', '-dont_show',
-         '-ext_output <', all_files])
-    '''
-
-    '''
-    # This method is a security risk if we start taking external output
-    cmd = ('./darknet detector test {} {} {} -thresh {} -save_labels -dont_show -ext_output < {}'.format(
-           fpath_data_cfg, fpath_model_cfg, fpath_weights, thresh, fpath_images))
-    subprocess.run(cmd, cwd=dir_darknet, shell=True)
-    '''
-
 
 
 def convert_to_geojson(bboxes, properties):
