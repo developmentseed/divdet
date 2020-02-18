@@ -6,6 +6,7 @@ import os.path as op
 
 from kfp import dsl, components
 import kfp.gcp as gcp
+from kubernetes.client import V1Toleration
 
 #######################################
 # Load custom components
@@ -23,6 +24,9 @@ comp_export_fname = op.join(os.environ['BUILDS_DIR'], 'divdet', 'kfpipelines',
                             'components', 'od_export', 'component.yaml')
 export_component = components.load_component(filename=comp_export_fname)
 
+########################################
+# Define a toleration to a ML node taint 
+ml_tol = V1Toleration(effect='NoSchedule', key='mlUseOnly', operator='Equal', value='true')
 
 @dsl.pipeline(name='Divot detect OD API training/export',
               description='A pipeline to train/export an instance segmentation model.')
@@ -48,6 +52,7 @@ def divot_detect_pipeline(
                                eval_checkpoint_metric,
                                metric_objective_type).set_gpu_limit(1)
     train_op.add_resource_limit('nvidia.com/gpu', 1)  # `limit` will automatically get mirrored for resource_request
+    train_op.add_toleration(ml_tol)  # Add a toleration to our custom ML node taint (so only ML workloads get put on GPUS)
     train_op.add_resource_request('memory', '20Gi')
     train_op.add_resource_limit('memory', '25Gi')
     train_op.set_image_pull_policy('Always')
@@ -61,6 +66,7 @@ def divot_detect_pipeline(
                                  train_op.outputs['best_checkpoint'],
                                  inference_output_directory).set_gpu_limit(1).after(train_op)
     export_op.add_resource_limit('nvidia.com/gpu', 1)  # `limit` will automatically get mirrored for resource_request
+    export_op.add_toleration(ml_tol)  # Add a toleration to our custom ML node taint (so only ML workloads get put on GPUS)
     export_op.add_resource_request('memory', '2Gi')
     export_op.add_resource_limit('memory', '3Gi')
     export_op.set_image_pull_policy('Always')
