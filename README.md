@@ -54,14 +54,16 @@ export PATH=$PATH:${HOME}/.kfctl
 # Set GCP creds
 export CLIENT_ID=<my_client_id>
 export CLIENT_SECRET=<my_client_secret>
-export CONFIG_URI="https://raw.githubusercontent.com/kubeflow/manifests/v0.7-branch/kfdef/kfctl_gcp_iap.0.7.1.yaml"
+#export KFCTL_DEPLOYMENT=kfctl_gcp_iap.v0.7.1.yaml
+export KFCTL_DEPLOYMENT=kfctl_gcp_iap.v1.0.0.yaml
+export CONFIG_URI="https://raw.githubusercontent.com/kubeflow/manifests/master/kfdef/${KFCTL_DEPLOYMENT}"
 
 # Set GCP project vars
 export PROJECT=divot-detect
 export ZONE=us-east1-c
 # KF_NAME can't be a full directory path, just a directory name
 # Increment the version for each cluster you create. Otherwise, the cluster may have issues deploying if you delete the cluster storage
-export KF_NAME=kubeflow-app-v19
+export KF_NAME=kubeflow-app-v21
 
 # Set local deployment directory
 export BASE_DIR=${BUILDS_DIR}/divdet
@@ -88,7 +90,7 @@ export IAM_CONFIG_FILE=${KF_DIR}/gcp_config/iam_bindings.yaml
 yq w -i ${IAM_CONFIG_FILE} bindings[2].roles[3] roles/storage.admin
 
 # Deploy to GCP
-export CONFIG_FILE=${KF_DIR}/kfctl_gcp_iap.0.7.1.yaml
+export CONFIG_FILE=${KF_DIR}/${KFCTL_DEPLOYMENT}
 kfctl apply -V -f ${CONFIG_FILE}
 ```
 
@@ -117,8 +119,7 @@ gcloud container node-pools create gpu-node-pool \
 --scopes cloud-platform --verbosity error \
 --accelerator=type=nvidia-tesla-p100,count=1 \
 --service-account ${KF_NAME}-user@${PROJECT}.iam.gserviceaccount.com \
---node-labels=mlUseIntended="true"
-#--node-taints cloud.google.com/gke-preemptible=true:NoSchedule \
+--node-taints mlUseOnly=true:NoSchedule 
 #--preemptible
 ```
 ## Verifying resources
