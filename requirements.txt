@@ -5,3 +5,7 @@ scikit-image
 absl-py
 tensorflow==1.15.2
 kfp
+sqlalchemy
+geoalchemy2
+psycopg2
+jupyter
