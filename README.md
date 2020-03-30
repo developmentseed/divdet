@@ -161,6 +161,9 @@ Reasonable defaults/examples for pipeline parameters:
 ```bash
 # Delete cluster/resources once finished. You can skip deleting the storage if you want to rerun the same cluster later
 kfctl delete -f ${CONFIG_FILE} --delete_storage
+
+gcloud compute backend-services list
+gcloud compute backend-services delete <name> --global
 ```
 
 # Technical Deployment Notes
