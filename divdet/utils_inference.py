@@ -16,6 +16,7 @@ import numpy as np
 from tqdm import tqdm
 import skimage.io as sio
 from skimage.transform import downscale_local_mean
+from skimage.measure import regionprops
 from rasterio.windows import Window
 from geojson import Feature, Polygon
 
@@ -26,6 +27,59 @@ def iter_grouper(iterable, n, fillvalue=None):
     args = [iter(iterable)] * n
 
     return zip_longest(*args, fillvalue=fillvalue)
+
+
+def calculate_region_grad(image, masked_pix):
+    """Calculate the vertical and horizontal gradient using numpy's gradient.
+
+    Parameters
+    ----------
+    image: array-like
+        Image pixels.
+    masked_pix: array-like
+        Bool mask for pixels to exclude when returning mean gradient.
+        For example, pass the binary crater mask to calculate only the
+        gradient for pixels within the crater.
+
+    Returns
+    -------
+    mean_h: float
+        Mean horizontal gradient of included pixels. Positive is to the right.
+    mean_v: float
+        Mean vertical gradient of included pixels. Positive is downward.
+    """
+    # TODO: could improve function to take a list of good_inds and avoid
+    # recomputing gradient repeatedly
+
+    if masked_inds.dtype != bool:
+        raise ValueError('`masked_inds` must be of type bool')
+    if masked_inds.shape[:2] != image.shape[:2]:
+        raise ValueError('Height and width of `masked_inds` must match `image`')
+
+    mean_h = np.ma.masked_array(np.gradient(image, axis=0),
+                                mask=masked_inds).mean()
+    mean_v = np.ma.masked_array(np.gradient(image, axis=1),
+                                mask=masked_inds).mean()
+    return mean_h, mean_v
+
+
+def calculate_shape_props(mask):
+    """Calculate simple geometric metrics for a binary mask.
+
+    Parameters
+    ----------
+    mask: numpy.ndarray
+        2 dimensional binary image containing a single object blob (e.g., a
+        mask for one crater).
+    """
+
+    mask = mask.squeeze()
+    if mask.ndim != 2:
+        raise RuntimeError('`mask` must be 2D.')
+    if mask.dtype != bool:
+        raise ValueError('`mask` must be of type bool')
+
+    props = regionprops(mask)
 
 
 def get_slice_bounds(image_size, slice_size=(1024, 1024),
@@ -71,6 +125,26 @@ def get_slice_bounds(image_size, slice_size=(1024, 1024),
     return slice_coords
 
 
+def windowed_reads_rasterio(tif, slice_coords):
+    """Make a series of windowed reads
+
+    Parameters
+    ----------
+    tif: open rasterio image
+    slice_coords: list
+        List of (x, y, width, height) rows in pixel coords to make windowed
+        reads.
+    """
+
+    # Loop through all windows and save if they don't exist
+    windows = []
+    for (x_pt, y_pt, width, height) in tqdm(slice_coords):
+        # Rasterio works in `xy` coords, not `ij`
+        windows.append(tif.read(1, window=Window(y_pt, x_pt, width, height)))
+
+    return windows
+
+
 def yield_windowed_reads_rasterio(tif, slice_coords):
     """Make a series of windowed reads via generator
 
@@ -88,12 +162,52 @@ def yield_windowed_reads_rasterio(tif, slice_coords):
         yield tif.read(1, window=Window(y_pt, x_pt, width, height))
 
 
+def _cut_window(arr, row, col, width, height):
+    """Cut a slice out of an array given coords and width/height"""
+
+    row, col = int(np.round(row)), int(np.round(col))
+    height, width = int(np.round(height)), int(np.round(width))
+
+    # Slice array
+    sub_arr = arr[row:row + height, col:col + width, ...]
+
+    if sub_arr.shape[:2] != (height, width):
+        sub_arr = np.pad(sub_arr, (height, width))
+
+    return sub_arr
+
+
+def windowed_reads_numpy(arr, slice_coords):
+    """Make a series of windowed reads
+
+    Parameters
+    ----------
+    arr: np.ndarray
+        Image data
+    slice_coords: list
+        List of (x, y, width, height) rows in pixel coords to make windowed
+        reads.
+    """
+    windows = []
+    # Store all windows
+    for (row, col, height, width) in tqdm(slice_coords):
+        sub_arr = _cut_window(arr, row, col, width, height)
+        windows.append(dict(image_data=sub_arr, row=row, col=col,
+                            height=height, width=width))
+        # Create a contiguous array (necessary for b64 encoding)
+        #windows.append(dict(image_data=np.ascontiguousarray(sub_arr),
+                             row=row, col=col, height=height, width=width))
+
+    return windows
+
+
 def yield_windowed_reads_numpy(arr, slice_coords):
     """Make a series of windowed reads via generator
 
     Parameters
     ----------
     arr: np.ndarray
+        Image data
     slice_coords: list
         List of (x, y, width, height) rows in pixel coords to make windowed
         reads.
@@ -101,16 +215,7 @@ def yield_windowed_reads_numpy(arr, slice_coords):
 
     # Yield all windows
     for (row, col, height, width) in tqdm(slice_coords):
-
-        # Make sure we're dealing with ints
-        row, col = int(np.round(row)), int(np.round(col))
-        height, width = int(np.round(height)), int(np.round(width))
-
-        # Slice array
-        sub_arr = arr[row:row + height, col:col + width, ...]
-
-        if sub_arr.shape[:2] != (height, width):
-            sub_arr = np.pad(sub_arr, (height, width))
+        sub_arr  = _cut_window(arr, row, col, width, height)
 
         # Create a contiguous array (necessary for b64 encoding)
         #yield dict(image_data=np.ascontiguousarray(sub_arr), row=row, col=col,
@@ -245,36 +350,3 @@ def poly_iou(poly1, poly2, thresh=None):
         return (intersection / union) >= thresh
 
     return intersection / union
-
-
-def convert_to_geojson(bboxes, properties):
-    """Write a set of bboxes to a geojson string.
-
-    Parameters
-    ----------
-    bboxes: ndarray
-        Bbox coordinates where each row is <x1> <y1> <x2> <y2>. Points
-        correspond to LL and UR coordinates.
-    properties: list
-        List of property dicts (matching length of bboxes array) to be written
-        to `properties` key in each geojson Feature.
-
-    Returns
-    -------
-    geojson_features: list of str
-        List of features ready to be converted to FeatureCollection and
-    	saved to disk with geojson.dump
-    """
-    if not len(bboxes) == len(properties):
-        raise ValueError('Length of bboxes and properties must match')
-
-    geojson_features = []
-    for (x1, y1, x2, y2), prop_dict in zip(bboxes, properties):
-        geojson_features.append(Feature(properties=prop_dict,
-                                        geometry=Polygon([[[x1, y1],
-                                                           [x2, y1],
-                                                           [x2, y2],
-                                                           [x1, y2],
-                                                           [x1, y1]]])))
-
-    return geojson_features
