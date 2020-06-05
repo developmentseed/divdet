@@ -24,7 +24,10 @@ import rasterio
 from absl import app, logging, flags
 
 from divdet.utils_inference import (iter_grouper, get_slice_bounds,
-                                    yield_windowed_reads_numpy)
+                                    yield_windowed_reads_numpy,
+                                    windowed_reads_numpy,
+                                    calculate_region_grad,
+                                    calculate_shape_props)
 from divdet.surface_feature import SurfaceFeature
 
 flags.DEFINE_string('project_id', None, 'Google cloud project ID.')
@@ -125,7 +128,8 @@ def pred_generator(generator, endpoint, batch_size=1):
         instances = []  # List that will hold b64 images to be sent to endpoint
 
         for image_dict in image_batch:
-            b64_image = arr_to_b64(image_dict.pop('image_data'))
+            b64_image = arr_to_b64(image_dict['image_data'])
+            #b64_image = arr_to_b64(image_dict.pop('image_data'))
             pred_batch.append(image_dict)
 
             #XXX KF Serving example here:
@@ -210,10 +214,12 @@ def proc_message(message, database_uri, endpoint, batch_size):
                 slice_bounds = get_slice_bounds(
                     scaled_image.shape, slice_size=message.get('window_size'),
                     min_window_overlap=message.get('min_window_overlap'))
-                slice_gen = yield_windowed_reads_numpy(scaled_image, slice_bounds)
+
+                slices_batch = yield_windowed_reads_numpy(scaled_image, slice_bounds)
+                #slice_batch = windowed_reads_numpy(scaled_image, slice_bounds)
 
                 # Calculate slice bounds and create generator
-                pred_gen = pred_generator(slice_gen, message.get('endpoint'),
+                pred_gen = pred_generator(slice_batch, message.get('endpoint'),
                                           message.get('batch_size'))
 
                 preds.extend(list(pred_gen))
@@ -223,33 +229,18 @@ def proc_message(message, database_uri, endpoint, batch_size):
     selected_inds = tf.image.non_max_suppression(boxes, scores,
                                                  max_output_size=len(preds))
     preds = preds[selected_inds]
+    slices = slices[selected_inds]
 
     ###########################
-    # Determine quadtrees
-    for pred in preds:
-        # Attributes: Need TL/BR in meters, polygon, confidence, quadkey, image ID
-        # Functionality: init from OD pred, inserting into database
-        geom_string = ''
+    # Loop over preds, determine properties, and store
+    for pred, mask in preds:
 
-        # Get TL and BR points
-        crater_feat = SurfaceFeature(tl_lon, tl_lat, br_lon, br_lat,
-                                     geom_string, pred['confidence'],
-                                     pred['image_id'])
-        crater_feat.determine_quadkey()
+        # TODO: will need to bring along original image for gradient calcs
+        #grad_h, grad_v = calculate_region_grad(mask)
+        shape_props = calculate_shape_props(mask)
+        ecc, n_pix = shape_props['eccentricity'], shape_props['area']
 
-    ###########################
-    # Pass results back to database
-    for crater in preds:
-        # Get all craters where quadkey matches and NOT from this image
-        qks_to_check = [qk for qk in [crater.quadkey, crater.quadkey[:-1]]
-                        if len(qk)]  # Get orig QK and parent
-
-        # If crater match, don't insert. Check:
-        #    * in quadkey or parent quadkey
-        #    * bbox overlap above IOU
-        #    * higher confidence
-
-        # If no match, insert new crater
+        # Pass results back to database
 
     message.ack()
 
