@@ -2,104 +2,43 @@
 Class and tools for managing surface feature detections
 """
 
-import math
-
+IOU_THRESH = 0.75
+TILE_SIZE = 256
+MAX_ZOOM = 20
 MARS_RADIUS = 3396190  # From CTX data
 EARTH_RADIUS = 6378137
-TILE_SIZE = 256
 ORIGIN_SHIFT = 2.0 * math.pi * MARS_RADIUS / 2.0
 INITIAL_RESOLUTION = 2.0 * math.pi * MARS_RADIUS / float(TILE_SIZE)
-MAX_ZOOM = 20
 
 
-class SurfaceFeature(object):
-    """Object to hold information about a detected surface feature"""
+import os.path as op
+import csv
+import json
+from pathlib import Path
 
-    def __init__(self, tl_lon, tl_lat, br_lon, br_lat, poly, confidence,
-                 image_id):
-        """Surface feature containing info, geometry, etc. for a surface detection
+import math
+from osgeo import ogr
+import numpy as np
+from tqdm import tqdm
 
-        Parameters
-        ----------
-        tl_lon: float
-            Top left longitude
-        tl_lat: float
-            Top left latitude
-        br_lon: float
-            Bottom right longitude
-        br_lat: float
-            Bottom right latitude
-        poly: str
-            Polygon outlining feature in WKT format
-        confidence: float
-            Confidence of prediction on interval [0, 1]
-        image_id: str
-            Unique ID of the image (e.g., "B04_011293_1265_XN_53S071W")
-        """
+from sqlalchemy import create_engine, event, func
+from sqlalchemy import (Column, Integer, String, Float,
+                        ForeignKey)
+from sqlalchemy.sql import select
+from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.schema import Index
 
-        check_lonlat_validity(tl_lon, tl_lat)
-        check_lonlat_validity(br_lon, br_lat)
-        self.tl_lon, self.tl_lat = tl_lon, tl_lat
-        self.br_lon, self.br_lat = br_lon, br_lat
-        self.poly = poly
+from geoalchemy2 import Geometry
+from geoalchemy2.functions import ST_Intersects
 
-        if not 0 <= confidence <= 1:
-            raise ValueError(f'Confidence should be on interval [0, 1]. Got {confidence}')
-        self.confidence = confidence
-
-        self.image_id = image_id
-        self.quadkey = None
-
-    def determine_quadkey(self):
-        """Set the quadkey for a surface feature based on TL and BR points"""
-        qk1 = point_to_quadkey(self.tl_lon, self.tl_lat, MAX_ZOOM)
-        qk2 = point_to_quadkey(self.br_lon, self.br_lat, MAX_ZOOM)
-
-        self.quadkey = smallest_common_quadkey(qk1, qk2)
+# Set the declarative base to prep creation of SQL classes
+Base = declarative_base()
 
 
 def resolution(zoom):
     """Get the meters per pixel"""
     return INITIAL_RESOLUTION / (2 ** zoom)
-
-
-def point_to_quadkey(longitude, latitude, zoom):
-    """Convert a point to a quadkey string"""
-
-    meter_x = longitude * ORIGIN_SHIFT / 180.0
-    meter_y = math.log(math.tan((90.0 + latitude) * math.pi / 360.0)) / (math.pi / 180.0)
-    meter_y = meter_y * ORIGIN_SHIFT / 180.0
-
-    pixel_x = abs(round((meter_x + ORIGIN_SHIFT) / resolution(zoom=zoom)))
-    pixel_y = abs(round((meter_y - ORIGIN_SHIFT) / resolution(zoom=zoom)))
-
-    tms_x = int(math.ceil(pixel_x / float(TILE_SIZE)) - 1)
-    tms_y = int(math.ceil(pixel_y / float(TILE_SIZE)) - 1)
-    tms_y = (2 ** zoom - 1) - tms_y
-
-    value = ''
-    #tms_y = (2 ** self.zoom - 1) - tms_y
-    for i in range(zoom, 0, -1):
-        digit = 0
-        mask = 1 << (i - 1)
-        if (tms_x & mask) != 0:
-            digit += 1
-        if (tms_y & mask) != 0:
-            digit += 2
-        value += str(digit)
-    return value
-
-
-def smallest_common_quadkey(qk1, qk2):
-    """Find the smallest quadkey that overlaps two points."""
-
-    for ind, (k1, k2) in enumerate(zip(qk1, qk2)):
-        if k1 == k2:
-            continue
-        else:
-            return qk1[:ind]
-
-    return ''
 
 
 def check_lonlat_validity(lat, lon):
@@ -108,3 +47,121 @@ def check_lonlat_validity(lat, lon):
         raise RuntimeError(f'Latitude {lat} is outside valid range.')
     if abs(lon) > 180:
         raise RuntimeError(f'Longitude {lon} is outside valid range.')
+
+
+class Crater(Base):
+    """Geometry and properties for a single crater
+
+    Attributes
+    ----------
+    geometry: str
+        Polygon outlining the crater in WKT format.
+    confidence: float
+        ML model confidence that this is indeed a crater.
+    eccentricity: float
+        Eccentricity of the purported crater. Zero is a perfect circle.
+        Ellipses are greater than zero but less than 1 with larger numbers
+        corresponding to longer ellipses (larger difference between axes.
+    gradient_angle: float
+        Angle on the ground corresponding to the average angle from dark to
+        light pixel intensity.
+    """
+
+    __tablename__ = 'craters'
+    id = Column(Integer, primary_key=True)
+    geometry = Column(Geometry('POLYGON'))
+    confidence = Column(Float)
+    eccentricity = Column(Float)
+    gradient_angle = Column(Float)
+    image_id = Column(Integer, ForeignKey('images.id'))
+
+    image = relationship('Image', back_populates='craters')
+
+    # Add table index according to
+    #   https://stackoverflow.com/a/6627154
+    __table_args__ = (Index('geom_index', 'geometry', 'confidence'), )
+
+    def __repr__(self):
+        """Define string representation."""
+        return f'<Crater(confidence={self.confidence}, image={self.image})>'
+
+
+class Image(Base):
+    """Metadata for one satellite image
+
+    Attributes
+    ----------
+    lon: float
+        Longitude of the image center
+    lat: float
+        Latitude of the image center
+    satellite: str
+        Satellite platform (e.g., 'MRO' or 'LROC')
+    camera: str
+        Imaging platform (e.g., 'CTX', 'HiRISE', or 'WAC')
+    pds_id: str
+        Planetary Data System unique ID of the image (e.g., 'B04_011293_1265_XN_53S071W')
+    subsolar_azimuth: float
+        Direction of sun in image CCW from right.
+    """
+
+    __tablename__ = 'images'
+    id = Column(Integer, primary_key=True)
+    lon, lat = Column(Float), Column(Float)
+    pds_id = Column(String)
+    satellite = Column(String)
+    camera = Column(String)
+    subsolar_azimuth = Column(Float)
+
+    # Add a relationship with the Crater class
+    craters = relationship('Crater', back_populates='image', cascade="all, delete, delete-orphan")
+
+    def __repr__(self):
+        """Define string representation."""
+        return f'<Image({self.satellite}:{self.camera}, pds_id={self.pds_id})>'
+
+
+@event.listens_for(session, 'before_flush')
+def receive_before_flush(session, flush_context, instances):
+    "Verify proposed database insertions using the 'before_flush' event."
+    for proposed_object in session.new:
+
+        ##############################
+        # Look for repeat Image object
+        if type(proposed_object) == Image:
+            match = session.query(Image).filter(proposed_object.pds_id == Image.pds_id).one_or_none()
+            if match:
+                session.expunge(proposed_object)
+                print(f'Aborted insert for {proposed_object}. Image ID exists already.')
+            continue
+
+        #########################################################################################
+        # Identify if proposed craters should 1. not be inserted or 2. overwrite existing craters
+
+        #stmt_confidence = proposed_object.confidence <= Crater.confidence
+        stmt_any_overlap = func.ST_Intersects(proposed_object.geometry, Crater.geometry)  # include or no?
+
+        # Conditions for match to existing crater (If met, skip insert)
+        intersection = func.ST_Area(func.ST_Intersection(proposed_object.geometry, Crater.geometry))
+        total_area = func.ST_Area(func.ST_Collect(proposed_object.geometry, Crater.geometry))
+        iou = intersection / (total_area - intersection)
+
+        # Run query against database
+        matches = session.query(Crater).filter(stmt_any_overlap, iou > iou_thresh).all()
+        if matches is None:
+            continue
+
+        # If crater overlaps found, determine if we should abort insert or overwrite.
+        for crater_match in matches:
+            print(f'Found {len(matches)} craters meeting IOU threshold...')
+
+            # Abort insert because new detection is not higher than existing
+            if proposed_object.confidence <= crater_match.confidence:
+                session.expunge(proposed_object)
+                print(f'Aborted insert for {proposed_object}.')
+                return
+
+            # Delete existing crater because new detection is higher confidence than existing
+            else:
+                session.delete(crater_match)
+                print(f'Overwriting {crater_match}.')
