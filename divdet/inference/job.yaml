@@ -1,0 +1,19 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: divdet-job
+spec:
+  parallelism: 4
+  backoffLimit: 6
+  template:
+    spec:
+      containers:
+      - name: divdet-inference
+        image: divdet-inference:v0
+        command: ["dd-inf", 
+                  "--project_id", "divot-detect",  
+                  "--subscription-name", "crater_image_queue", 
+                  "--inference-endpoint", "0.0.0.0",
+                  "--database-uri", "0.0.0.0"]
+      restartPolicy: Never
+
