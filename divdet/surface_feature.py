@@ -2,15 +2,6 @@
 Class and tools for managing surface feature detections
 """
 
-IOU_THRESH = 0.75
-TILE_SIZE = 256
-MAX_ZOOM = 20
-MARS_RADIUS = 3396190  # From CTX data
-EARTH_RADIUS = 6378137
-ORIGIN_SHIFT = 2.0 * math.pi * MARS_RADIUS / 2.0
-INITIAL_RESOLUTION = 2.0 * math.pi * MARS_RADIUS / float(TILE_SIZE)
-
-
 import os.path as op
 import csv
 import json
@@ -34,6 +25,15 @@ from geoalchemy2.functions import ST_Intersects
 
 # Set the declarative base to prep creation of SQL classes
 Base = declarative_base()
+
+# Constants
+IOU_THRESH = 0.75
+TILE_SIZE = 256
+MAX_ZOOM = 20
+MARS_RADIUS = 3396190  # From CTX data
+EARTH_RADIUS = 6378137
+ORIGIN_SHIFT = 2.0 * math.pi * MARS_RADIUS / 2.0
+INITIAL_RESOLUTION = 2.0 * math.pi * MARS_RADIUS / float(TILE_SIZE)
 
 
 def resolution(zoom):
