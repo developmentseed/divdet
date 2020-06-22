@@ -92,7 +92,7 @@ def load_dataset(fpaths_img, fpaths_xml):
     return img_list, xml_list
 
 
-def _get_valid_corners(img_arr, crop_size, l_thresh, corner_thresh):
+def _get_all_valid_corners(img_arr, crop_size, l_thresh, corner_thresh):
     """Get all valid corners for random cropping"""
 
     valid_pix = img_arr >= l_thresh
@@ -103,7 +103,8 @@ def _get_valid_corners(img_arr, crop_size, l_thresh, corner_thresh):
     return conv > (corner_thresh * crop_size ** 2)
 
 
-def _get_valid_corners(img_arr, crop_size, n_crops, l_thresh, corner_thresh):
+def _get_random_valid_corners(img_arr, crop_size, n_crops, l_thresh,
+                              corner_thresh):
     """Get all valid corners for random cropping deterministically"""
 
     valid_pix = img_arr >= l_thresh
