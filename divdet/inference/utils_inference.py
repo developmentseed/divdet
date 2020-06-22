@@ -10,7 +10,7 @@ from functools import partial
 
 import subprocess
 import warnings
-from itertools import zip_longest
+from itertools import zip_longest, repeat
 
 import numpy as np
 from tqdm import tqdm
@@ -18,7 +18,6 @@ import skimage.io as sio
 from skimage.transform import downscale_local_mean
 from skimage.measure import regionprops
 from rasterio.windows import Window
-from geojson import Feature, Polygon
 
 
 def iter_grouper(iterable, n, fillvalue=None):
@@ -51,15 +50,15 @@ def calculate_region_grad(image, masked_pix):
     # TODO: could improve function to take a list of good_inds and avoid
     # recomputing gradient repeatedly
 
-    if masked_inds.dtype != bool:
+    if masked_pix.dtype != bool:
         raise ValueError('`masked_inds` must be of type bool')
-    if masked_inds.shape[:2] != image.shape[:2]:
+    if masked_pix.shape[:2] != image.shape[:2]:
         raise ValueError('Height and width of `masked_inds` must match `image`')
 
     mean_h = np.ma.masked_array(np.gradient(image, axis=0),
-                                mask=masked_inds).mean()
+                                mask=masked_pix).mean()
     mean_v = np.ma.masked_array(np.gradient(image, axis=1),
-                                mask=masked_inds).mean()
+                                mask=masked_pix).mean()
     return mean_h, mean_v
 
 
@@ -101,6 +100,7 @@ def get_slice_bounds(image_size, slice_size=(1024, 1024),
         Pixel coordinates (row, col, window_size_x, window_size_y)
         useful for making windowed reads into a larger image.
     """
+    # TODO: swap to value errors
     assert isinstance(slice_size[0], int)
     assert isinstance(slice_size[1], int)
     assert isinstance(min_window_overlap[0], int)
@@ -196,7 +196,7 @@ def windowed_reads_numpy(arr, slice_coords):
                             height=height, width=width))
         # Create a contiguous array (necessary for b64 encoding)
         #windows.append(dict(image_data=np.ascontiguousarray(sub_arr),
-                             row=row, col=col, height=height, width=width))
+        #                    row=row, col=col, height=height, width=width))
 
     return windows
 
@@ -238,7 +238,11 @@ def non_max_suppression(bboxes, overlap_thresh=0.4):
     picks: list of int
             Good indices to choose from bboxes array
 
-    Note: Adapted from Malisiewicz et al.
+    Notes
+    -----
+    Adapted from Malisiewicz et al.
+
+    Consider using TensorFlows built in non-max suppression functionality.
     """
 
     # Error check for no inputs
@@ -289,7 +293,8 @@ def non_max_suppression(bboxes, overlap_thresh=0.4):
     return picks
 
 
-def poly_non_max_suppression(polys, confidences, overlap_thresh=0.4, multi_proc_chunksize=None):
+def poly_non_max_suppression(polys, confidences, overlap_thresh=0.4,
+                             mp_processes=None, mp_chunksize=None):
     """Non-maximum suppression on OGR/GDAL polygons to find duplicates.
 
     Parameters
@@ -300,15 +305,16 @@ def poly_non_max_suppression(polys, confidences, overlap_thresh=0.4, multi_proc_
         Confidences on interval [0, 1] corresponding to prediction score of polygons in `polys`.
     overlap_thresh: float
         Intersection-over-union threshold to remove polygons.
+    mp_processes: None or int
+        Number of multiprocessing processes to start. Generally, want this to
+        equal the number of cores you have.
+    mp_chunksize: None or int
+        Approximate number of chunks to divide the iterable into.
 
     Returns
     -------
     picks: list of int
         Good indices to keep in polys list.
-
-    Notes
-    -----
-    Consider using TensorFlows built in non-max suppression functionality.
     """
 
     # Error check for no inputs
@@ -318,32 +324,60 @@ def poly_non_max_suppression(polys, confidences, overlap_thresh=0.4, multi_proc_
         raise ValueError("`polys` and `confidences` do not have the same length.")
     if not 0 <= overlap_thresh <= 1.:
         raise ValueError("`overlap_thres` must be on interval [0, 1].")
+    if not mp_chunksize:
+        mp_chunksize = 1
 
-    picks = []
-    conf_inds = np.argsort(confidences) # Order confidences in ascending order
+    picks = []  # List with poly indices to keep
 
-    while len(conf_inds):
+    # Order candidate confidences in ascending order
+    candidate_inds = np.argsort(confidences)
 
-        # Append best current score to picks list
-        picks.append(conf_inds[-1])
+    while candidate_inds.size:
+        # Append best current score to picks list and delete it from candidates
+        picks.append(candidate_inds[-1])
+        candidate_inds = np.delete(candidate_inds, -1)
+        if candidate_inds.size == 0:
+            break
 
-        # Find all polygons that overlap with most confident polygon
-        iou_partial_func = partial(poly_iou, poly1=polys[-1], thresh=overlap_thresh)
-        overlap_list = multiprocessing.imap(iou_partial_func, [poly[ind] for ind in conf_inds], multi_proc_chunksize)
+        # Get the IOU between the kept polygon and all remaining polygons
+        overlap_iou = []
+        with multiprocessing.Pool(processes=mp_processes) as pool:
+            overlap_iou = pool.starmap(poly_iou,
+                                       zip(repeat(polys[picks[-1]]),
+                                           [polys[ind] for ind in candidate_inds],
+                                           repeat(overlap_thresh)),
+                                       mp_chunksize)
 
-        # Remove overlapping polygons
-        overlap_arr = np.array(overlap_list)
-        conf_inds = np.delete(conf_inds, np.concatenate(
-            ([-1], np.where(overlap_arr)[0])))
+        # Remove indices of polygons that overlapped at or above the threshold
+        #     by only keeping indices where `overlap_thresh` was not met
+        candidate_inds = candidate_inds[np.invert(overlap_iou)]
 
     return picks
 
 
 def poly_iou(poly1, poly2, thresh=None):
-    """Compute intersection-over-union for two GDAL/OGR geometries."""
+    """Compute intersection-over-union for two GDAL/OGR geometries.
 
-    intersection = poly1.Intersection(poly2)
-    union = poly1.Union(poly2)
+    Parameters
+    ----------
+    poly1:
+        First polygon used in IOU calc.
+    poly2:
+        Second polygon used in IOU calc.
+    thresh: float or None
+        If not provided (default), returns the float IOU for the two polygons.
+        If provided, return True if the IOU met this threshold. Otherwise,
+        False.
+
+    Returns
+    -------
+    IOU: float or bool
+        Return the IOU value if `thresh` is None, otherwise boolean if the
+        threshold value was met.
+    """
+
+    intersection = poly1.Intersection(poly2).Area()
+    union = poly1.Union(poly2).Area()
 
     # If threshold was provided, return if IOU met the threshold
     if thresh is not None:
