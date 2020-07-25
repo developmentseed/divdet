@@ -38,10 +38,10 @@ KFCtl makes it easy to deploy KubeFlow on a kubernetes cluster
 
 ```bash
 # Setup as below or download directly from (1) https://github.com/kubeflow/kubeflow/releases or (2) https://github.com/kubeflow/kfctl/releases and place the binary file in ~/.kfctl
-export KUBEFLOW_BRANCH=0.7.1
-export KUBEFLOW_TAG=0.7.1-2-g55f9b2a
+export KUBEFLOW_BRANCH=1.0.2
+export KUBEFLOW_TAG=1.0.2-0-ga476281
 export PLATFORM=darwin  # Use `darwin` on Mac. Other option is `linux`
-wget -P /tmp https://github.com/kubeflow/kubeflow/releases/download/v${KUBEFLOW_BRANCH}/kfctl_v${KUBEFLOW_TAG}_${PLATFORM}.tar.gz
+wget -P /tmp https://github.com/kubeflow/kfctl/releases/download/v${KUBEFLOW_BRANCH}/kfctl_v${KUBEFLOW_TAG}_${PLATFORM}.tar.gz
 mkdir ~/.kfctl
 tar -xvf /tmp/kfctl_v${KUBEFLOW_TAG}_${PLATFORM}.tar.gz -C ${HOME}/.kfctl
 ```
@@ -55,15 +55,15 @@ export PATH=$PATH:${HOME}/.kfctl
 export CLIENT_ID=<my_client_id>
 export CLIENT_SECRET=<my_client_secret>
 #export KFCTL_DEPLOYMENT=kfctl_gcp_iap.v0.7.1.yaml
-export KFCTL_DEPLOYMENT=kfctl_gcp_iap.v1.0.0.yaml
-export CONFIG_URI="https://raw.githubusercontent.com/kubeflow/manifests/master/kfdef/${KFCTL_DEPLOYMENT}"
+export KFCTL_DEPLOYMENT=kfctl_gcp_iap.v1.0.2.yaml
+export CONFIG_URI="https://raw.githubusercontent.com/kubeflow/manifests/v1.0-branch/kfdef/${KFCTL_DEPLOYMENT}"
 
 # Set GCP project vars
 export PROJECT=divot-detect
 export ZONE=us-east1-c
 # KF_NAME can't be a full directory path, just a directory name
 # Increment the version for each cluster you create. Otherwise, the cluster may have issues deploying if you delete the cluster storage
-export KF_NAME=kubeflow-app-v21
+export KF_NAME=kubeflow-app-v31
 
 # Set local deployment directory
 export BASE_DIR=${BUILDS_DIR}/divdet
@@ -80,7 +80,7 @@ kfctl build -V -f ${CONFIG_URI}
 export GCP_CONFIG_FILE=${KF_DIR}/gcp_config/cluster-kubeflow.yaml
 yq w -i ${GCP_CONFIG_FILE} resources[0].properties.cpu-pool-enable-autoscaling false
 yq w -i ${GCP_CONFIG_FILE} resources[0].properties.gpu-pool-enable-autoscaling false
-yq w -i ${GCP_CONFIG_FILE} resources[0].properties.gpu-pool-max-nodes 0
+yq w -i ${GCP_CONFIG_FILE} resources[0].properties.gpu-pool-max-nodes 1
 yq w -i ${GCP_CONFIG_FILE} resources[0].properties.cpu-pool-machine-type n1-standard-4
 #yq w -i ${GCP_CONFIG_FILE} resources[0].properties.cpu-pool-disk-size 100GB
 yq w -i ${GCP_CONFIG_FILE} resources[0].properties.autoprovisioning-config.enabled false
@@ -117,7 +117,7 @@ gcloud container node-pools create gpu-node-pool \
 --enable-autoscaling --min-nodes=0 --max-nodes=1 \
 --machine-type n1-highmem-8 \
 --scopes cloud-platform --verbosity error \
---accelerator=type=nvidia-tesla-p100,count=1 \
+--accelerator=type=nvidia-tesla-k80,count=1 \
 --service-account ${KF_NAME}-user@${PROJECT}.iam.gserviceaccount.com \
 --node-taints mlUseOnly=true:NoSchedule 
 #--preemptible
@@ -164,6 +164,8 @@ kfctl delete -f ${CONFIG_FILE} --delete_storage
 
 gcloud compute backend-services list
 gcloud compute backend-services delete <name> --global
+
+# Make sure disks are deleted under Compute Engine > Disks
 ```
 
 # Technical Deployment Notes
