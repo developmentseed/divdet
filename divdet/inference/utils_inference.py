@@ -79,6 +79,7 @@ def calculate_shape_props(mask):
         raise ValueError('`mask` must be of type bool')
 
     props = regionprops(mask)
+    return props
 
 
 def get_slice_bounds(image_size, slice_size=(1024, 1024),
@@ -100,11 +101,10 @@ def get_slice_bounds(image_size, slice_size=(1024, 1024),
         Pixel coordinates (row, col, window_size_x, window_size_y)
         useful for making windowed reads into a larger image.
     """
-    # TODO: swap to value errors
-    assert isinstance(slice_size[0], int)
-    assert isinstance(slice_size[1], int)
-    assert isinstance(min_window_overlap[0], int)
-    assert isinstance(min_window_overlap[1], int)
+    if not (isinstance(slice_size[0], int) and isinstance(slice_size[1], int)):
+        raise ValueError('Slice sizes aren\'t integers.')
+    if not (isinstance(min_window_overlap[0], int) and isinstance(min_window_overlap[1], int)):
+        raise ValueError('Window overlap sizes aren\'t integers.')
 
     ideal_intervals = [win_dim - overlap for win_dim, overlap
                        in zip(slice_size, min_window_overlap)]

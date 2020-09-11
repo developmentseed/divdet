@@ -95,12 +95,14 @@ class Image(Base):
         Longitude of the image center
     lat: float
         Latitude of the image center
-    satellite: str
+    instrument_host_id: str
         Satellite platform (e.g., 'MRO' or 'LROC')
-    camera: str
+    instrument_id: str
         Imaging platform (e.g., 'CTX', 'HiRISE', or 'WAC')
     pds_id: str
         Planetary Data System unique ID of the image (e.g., 'B04_011293_1265_XN_53S071W')
+    pds_version_id: str
+        Version of the record (e.g., 1, 2)
     subsolar_azimuth: float
         Direction of sun in image CCW from right.
     """
@@ -108,9 +110,10 @@ class Image(Base):
     __tablename__ = 'images'
     id = Column(Integer, primary_key=True)
     lon, lat = Column(Float), Column(Float)
+    instrument_host_id = Column(String)
+    instrument_id = Column(String)
     pds_id = Column(String)
-    satellite = Column(String)
-    camera = Column(String)
+    pds_version_id = Column(String)
     subsolar_azimuth = Column(Float)
 
     # Add a relationship with the Crater class
@@ -118,9 +121,10 @@ class Image(Base):
 
     def __repr__(self):
         """Define string representation."""
-        return f'<Image({self.satellite}:{self.camera}, pds_id={self.pds_id})>'
+        return f'<Image({self.instrument_host_id}:{self.camera}, pds_id={self.pds_id})>'
 
 
+'''
 @event.listens_for(session, 'before_flush')
 def receive_before_flush(session, flush_context, instances):
     "Verify proposed database insertions using the 'before_flush' event."
@@ -165,3 +169,4 @@ def receive_before_flush(session, flush_context, instances):
             else:
                 session.delete(crater_match)
                 print(f'Overwriting {crater_match}.')
+'''
