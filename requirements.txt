@@ -3,7 +3,7 @@ numpy
 tqdm
 scikit-image
 absl-py
-tensorflow==1.15.2
+tensorflow==1.15.4
 kfp
 sqlalchemy
 geoalchemy2
