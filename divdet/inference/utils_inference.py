@@ -7,16 +7,16 @@ import os
 from os import path as op
 import multiprocessing
 from functools import partial
-
 import subprocess
 import warnings
 from itertools import zip_longest, repeat
 
+import ogr
 import numpy as np
 from tqdm import tqdm
 import skimage.io as sio
 from skimage.transform import downscale_local_mean
-from skimage.measure import regionprops
+from skimage.measure import regionprops, find_contours
 from rasterio.windows import Window
 
 
@@ -36,9 +36,9 @@ def calculate_region_grad(image, masked_pix):
     image: array-like
         Image pixels.
     masked_pix: array-like
-        Bool mask for pixels to exclude when returning mean gradient.
-        For example, pass the binary crater mask to calculate only the
-        gradient for pixels within the crater.
+        Integer mask for pixels to include when returning mean gradient.
+        For example, pass the binary crater mask to calculate only the gradient
+        for pixels within the crater.
 
     Returns
     -------
@@ -50,7 +50,7 @@ def calculate_region_grad(image, masked_pix):
     # TODO: could improve function to take a list of good_inds and avoid
     # recomputing gradient repeatedly
 
-    if masked_pix.dtype != bool:
+    if masked_pix.dtype != np.bool:
         raise ValueError('`masked_inds` must be of type bool')
     if masked_pix.shape[:2] != image.shape[:2]:
         raise ValueError('Height and width of `masked_inds` must match `image`')
@@ -68,18 +68,18 @@ def calculate_shape_props(mask):
     Parameters
     ----------
     mask: numpy.ndarray
-        2 dimensional binary image containing a single object blob (e.g., a
+        2 dimensional integer image containing a single object blob (e.g., a
         mask for one crater).
     """
 
     mask = mask.squeeze()
     if mask.ndim != 2:
         raise RuntimeError('`mask` must be 2D.')
-    if mask.dtype != bool:
-        raise ValueError('`mask` must be of type bool')
+    if mask.dtype != np.int:
+        raise ValueError('`mask` must be of type int')
 
     props = regionprops(mask)
-    return props
+    return props[0]  # Assume only one shape is in the mask
 
 
 def get_slice_bounds(image_size, slice_size=(1024, 1024),
@@ -138,7 +138,7 @@ def windowed_reads_rasterio(tif, slice_coords):
 
     # Loop through all windows and save if they don't exist
     windows = []
-    for (x_pt, y_pt, width, height) in tqdm(slice_coords):
+    for (x_pt, y_pt, width, height) in tqdm(slice_coords, desc='Making windowed reads'):
         # Rasterio works in `xy` coords, not `ij`
         windows.append(tif.read(1, window=Window(y_pt, x_pt, width, height)))
 
@@ -157,7 +157,7 @@ def yield_windowed_reads_rasterio(tif, slice_coords):
     """
 
     # Loop through all windows and save if they don't exist
-    for (x_pt, y_pt, width, height) in tqdm(slice_coords):
+    for (x_pt, y_pt, width, height) in tqdm(slice_coords, desc='Yielding windowed reads'):
         # Rasterio works in `xy` coords, not `ij`
         yield tif.read(1, window=Window(y_pt, x_pt, width, height))
 
@@ -190,7 +190,7 @@ def windowed_reads_numpy(arr, slice_coords):
     """
     windows = []
     # Store all windows
-    for (row, col, height, width) in tqdm(slice_coords):
+    for (row, col, height, width) in tqdm(slice_coords, desc='Making windowed reads'):
         sub_arr = _cut_window(arr, row, col, width, height)
         windows.append(dict(image_data=sub_arr, row=row, col=col,
                             height=height, width=width))
@@ -214,7 +214,7 @@ def yield_windowed_reads_numpy(arr, slice_coords):
     """
 
     # Yield all windows
-    for (row, col, height, width) in tqdm(slice_coords):
+    for (row, col, height, width) in tqdm(slice_coords, desc='Yielding windowed reads'):
         sub_arr  = _cut_window(arr, row, col, width, height)
 
         # Create a contiguous array (necessary for b64 encoding)
@@ -224,12 +224,10 @@ def yield_windowed_reads_numpy(arr, slice_coords):
 
 def non_max_suppression(bboxes, overlap_thresh=0.4):
     """Run non-maximum suppression to avoid duplicate detections.
-
     Sorts by confidence value
 
     bboxes: ndarray
             Numpy array where each row is <x1> <y1> <x2> <y2> <confidence>
-
     overlap_thresh: float
             Ratio of area overlap to remove bboxes.
 
@@ -384,3 +382,70 @@ def poly_iou(poly1, poly2, thresh=None):
         return (intersection / union) >= thresh
 
     return intersection / union
+
+
+def convert_mask_to_polygon(mask, xy_offset=(0, 0), simplify_tol=1., conf_thresh=0.5):
+    """Convert a [0, 1] confidence mask to a GDAL polygon"""
+
+    # Create padded mask
+    padded_mask = np.zeros((mask.shape[0] + 2, mask.shape[1] + 2), dtype=np.float)
+    padded_mask[1:-1, 1:-1] = mask
+    contours = find_contours(padded_mask, conf_thresh)
+
+    gdal_ring = ogr.Geometry(ogr.wkbLinearRing)
+
+    if len(contours) > 1:
+        raise RuntimeError('Found multiple mask contours for 1 crater.')
+
+    # Remove the padding and flip image from (y, x) to (x, y)
+    contour = np.fliplr(contours[0] - 1)
+
+    # Convert predicted mask to polygon
+    for verts in contour:
+        x = verts[0] + xy_offset[0]
+        y = verts[1] + xy_offset[1]
+        gdal_ring.AddPoint_2D(x, y)
+    x0 = contour[0, 0] + xy_offset[0]
+    y0 = contour[0, 1] + xy_offset[1]
+    gdal_ring.AddPoint_2D(x0, y0)  # Add 0th point to close the polygon
+
+    # Create polygon
+    gdal_poly = ogr.Geometry(ogr.wkbPolygon)
+    gdal_poly.AddGeometry(gdal_ring)
+
+    # TODO: Fix simplification
+    gdal_poly = gdal_poly.SimplifyPreserveTopology(simplify_tol)
+
+    return gdal_poly
+
+
+def geospatial_polygon_transform(poly, transform):
+    """Convert a polygon from pixel coords to geospatial coords
+
+    Parameters
+    ----------
+    poly: OGR Geometry
+        Polygon in original coordinates (e.g., pixels)
+    transform: rasterio dataset transform
+        A mapping from one coordinate frame to another (e.g., pixels to lat/lon)
+
+    Returns
+    -------
+    poly_transformed: OGR Geometry
+        Polygon with all points transformed to the new coordinates
+    """
+
+    # Convert predicted mask to polygon
+    gdal_ring = ogr.Geometry(ogr.wkbLinearRing)
+
+    # Get single geometry from the poly object
+    geom = poly.GetGeometryRef(0)
+    for pi in range(geom.GetPointCount()):
+        pt = transform * geom.GetPoint(pi)[:2]  # Only take first 2 coords in case 3 exist
+        gdal_ring.AddPoint(*pt)
+
+    # Create polygon
+    poly_transformed = ogr.Geometry(ogr.wkbPolygon)
+    poly_transformed.AddGeometry(gdal_ring)
+
+    return poly_transformed

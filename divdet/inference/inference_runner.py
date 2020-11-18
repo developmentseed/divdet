@@ -15,13 +15,13 @@ from functools import partial
 import ast
 import logging
 
-#import tensorflow as tf
+import tensorflow as tf
 import numpy as np
 from tqdm import tqdm
 from google.cloud import pubsub_v1
 from google.oauth2 import service_account
 #TODO: switch to rasterio if possible
-from skimage.transform import rescale
+from skimage.transform import rescale, resize
 #from skimage.io import imsave
 from PIL import Image as PIL_Image
 import rasterio
@@ -33,7 +33,7 @@ from osgeo import gdal
 from divdet.inference.utils_inference import (
     iter_grouper, get_slice_bounds, yield_windowed_reads_numpy,
     windowed_reads_numpy, calculate_region_grad, calculate_shape_props,
-    poly_non_max_suppression)
+    poly_non_max_suppression, convert_mask_to_polygon)
 from divdet.surface_feature import Crater, Image, Base
 
 flags.DEFINE_string('gcp_project', None, 'Google cloud project ID.')
@@ -110,22 +110,110 @@ def download_url_to_file(url, directory='/tmp', clobber=False, repeat_tries=5,
             logging.info(f'Too many repeats, stopping on {url}')
 
 
-def arr_to_b64(numpy_arr):
+def arr_to_b64(numpy_arr, ensure_RGB=True):
     """Convert a numpy array into a b64 string"""
 
     # Generate image in bytes format; will convert using `tobytes` if not contiguous
     image_pil = PIL_Image.fromarray(numpy_arr)
-    byte_io = BytesIO()
-    image_pil.save(byte_io, format="PNG")
+    if ensure_RGB:
+        image_pil = image_pil.convert('RGB')
 
-    #  Convert to base64; uses web-safe encoding
-    b64_image = base64.urlsafe_b64encode(byte_io.getvalue()).decode("utf-8")
+    byte_io = BytesIO()
+    image_pil.save(byte_io, format='PNG')
+
+    # Convert to base64
+    b64_image = base64.b64encode(byte_io.getvalue()).decode('utf-8')
+
+    # Web-safe encoding (haven't had much luck with this yet -- fails to decode)
+    #b64_image = b64_image.replace('+', '-')
+    #b64_image = b64_image.replace('/', '_')
+    #b64_image = base64.urlsafe_b64encode(byte_io.getvalue()).decode("utf-8")
     byte_io.close()
 
     return b64_image
 
 
-def pred_generator(generator, endpoint, batch_size=1):
+def pred_generator(generator, endpoint):
+    """Send a data from a generator to an inference endpoint"""
+
+    ###################################
+    # Create a batch of data to predict
+    for image_dict in tqdm(generator):
+
+        b64_image = arr_to_b64(image_dict['image_data'])
+
+        #XXX KF Serving example here:
+        #    https://github.com/kubeflow/kfserving/blob/master/docs/samples/tensorflow/input.json
+        instances = [{'b64': b64_image}]
+
+        ################
+        # Run prediction
+
+        payload = json.dumps({"inputs": {"input_tensor": instances}})  # TF "col" format
+
+        resp = requests.post(endpoint, data=payload)
+        resp_json = json.loads(resp.content)
+        if 'outputs' in resp_json.keys():
+            resp_outputs = resp_json['outputs']
+        else:
+            logging.error(f'Error in prediction step. Raw json: {resp_json}')
+
+        #############################
+        # Store and return prediction
+
+        # Only keep prediction indicies with confidences > 0 (some may have been filtered by OD API config)
+        n_good_inds = int(np.sum(np.array(resp_outputs['detection_scores'][0]) > 0))
+
+        image_dict['detection_scores'] = resp_outputs['detection_scores'][0][:n_good_inds]  # Probability each proposal corresponds to an object
+        image_dict['detection_masks'] = resp_outputs['detection_masks'][0][:n_good_inds]  # Mask for each proposal. Needs to be resized from (33, 33)
+        image_dict['proposal_boxes'] = resp_outputs['proposal_boxes'][0][:n_good_inds]  # Box coordinates for each object in orig image coords
+        image_dict['proposal_boxes_normalized'] = resp_outputs['proposal_boxes_normalized'][0][:n_good_inds]  # Box coordinates for each object in normalized coords
+
+        yield image_dict
+
+
+'''
+def pred_generator_batched(generator, endpoint, batch_size=1):
+    """Send a data from a generator to an inference endpoint using batching"""
+
+    ###################################
+    # Create a batch of data to predict
+    for image_batch in tqdm(iter_grouper(generator, batch_size)):
+
+        pred_batch = []  # List to hold image metadata, prediction information
+        instances = []  # List that will hold b64 images to be sent to endpoint
+
+        for image_dict in image_batch:
+            b64_image = arr_to_b64(image_dict['image_data'])
+            #b64_image = arr_to_b64(image_dict.pop('image_data'))
+            pred_batch.append(image_dict)
+
+            #XXX KF Serving example here:
+            #    https://github.com/kubeflow/kfserving/blob/master/docs/samples/tensorflow/input.json
+            instances.append({'b64': b64_image})
+
+        ################
+        # Run prediction
+
+        #payload = json.dumps({"instances": instances})  # TF "row" format
+        payload = json.dumps({"inputs": {"input_tensor": instances}})  # TF "col" format
+
+        resp = requests.post(endpoint, data=payload)
+        resp_outputs = json.loads(resp.content)['outputs']
+
+        #############################
+        # Store and return prediction
+        for pi, pred_dict in enumerate(pred_batch):
+            pred_dict['detection_score'] = resp_outputs['detection_scores'][pi]  # Probability each proposal corresponds to an object
+            pred_dict['detection_mask'] = resp_outputs['detection_masks'][pi]  # Mask for each proposal. Needs to be resized from (33, 33)
+            pred_dict['proposal_box'] = resp_outputs['proposal_boxes'][pi]  # Box coordinates for each object in orig image coords
+            pred_dict['proposal_box_normalized'] = resp_outputs['proposal_boxes_normalized'][pi]  # Box coordinates for each object in normalized coords
+
+        yield pred_batch
+'''
+
+
+def pred_generator_batched(generator, endpoint, batch_size=1):
     """Send a data from a generator to an inference endpoint"""
 
     ###################################
@@ -147,15 +235,19 @@ def pred_generator(generator, endpoint, batch_size=1):
         ################
         # Run prediction
 
-        payload = json.dumps({"instances": instances})
-        import ipdb; ipdb.set_trace()
+        #payload = json.dumps({"instances": instances})  # TF "row" format
+        payload = json.dumps({"inputs": {"input_tensor": instances}})  # TF "col" format
+
         resp = requests.post(endpoint, data=payload)
-        preds = json.loads(resp.content)['predictions']
+        resp_outputs = json.loads(resp.content)['outputs']
 
         #############################
         # Store and return prediction
-        for pred_dict, pred in zip(pred_batch, preds):
-            pred_dict['prediction_data'] = pred
+        for pi, pred_dict in enumerate(pred_batch):
+            pred_dict['detection_score'] = resp_outputs['detection_scores'][pi]  # Probability each proposal corresponds to an object
+            pred_dict['detection_mask'] = resp_outputs['detection_masks'][pi]  # Mask for each proposal. Needs to be resized from (33, 33)
+            pred_dict['proposal_box'] = resp_outputs['proposal_boxes'][pi]  # Box coordinates for each object in orig image coords
+            pred_dict['proposal_box_normalized'] = resp_outputs['proposal_boxes_normalized'][pi]  # Box coordinates for each object in normalized coords
 
         yield pred_batch
 
@@ -219,9 +311,10 @@ def proc_message(message, session):
         ###########################################################
         # Slice image appropriately and pass to prediction endpoint
         ###########################################################
-        preds = []
+        preds = {'detection_scores': [], 'detection_masks': [], 'proposal_boxes': [], 
+             'proposal_boxes_normalized': [], 'polygons': [], 'resized_masks': []}
         slices = []
-        with rasterio.open(image_fpath) as dataset:
+        with rasterio.open(geotiff_fpath) as dataset:
             image = dataset.read(1)  # Read data from first band
             if image.dtype == np.uint16:
                 image = (image / 65535. * 255).astype(np.uint8)
@@ -230,66 +323,105 @@ def proc_message(message, session):
                 logging.info('Processing at scale %s', scale)
 
                 # Rescale image, round, and convert back to orig datatype
-                scaled_image = rescale(image, scale, anti_aliasing=True).round().astype(image.dtype)
+
+                scaled_image = rescale(image, scale, mode='edge', preserve_range=True, 
+                                       anti_aliasing=True).round().astype(image.dtype)
 
                 # Calculate slice bounds and create generator
                 slice_bounds = get_slice_bounds(
                     scaled_image.shape,
-                    slice_size=(msg_dict['window_size'], msg_dict['window_size']) ,
+                    slice_size=(msg_dict['window_size'], msg_dict['window_size']),
                     min_window_overlap=(msg_dict['min_window_overlap'], msg_dict['min_window_overlap']))
 
                 logging.info('Created %s slices.', (len(slice_bounds)))
-                #slice_batch = yield_windowed_reads_numpy(scaled_image, slice_bounds)
                 slice_batch = windowed_reads_numpy(scaled_image, slice_bounds)
 
-                # Calculate slice bounds and create generator
+                # Generate predictions predictions
                 pred_gen = pred_generator(slice_batch,
-                                          msg_dict['prediction_endpoint'],
-                                          msg_dict['batch_size'])
+                                          msg_dict['prediction_endpoint'])
+                pred_batch = list(pred_gen)
+                
+                
+                # Convert predictions to polygon in orig image coordinate frame
+                for pred_set, slice_set in zip(pred_batch, slice_bounds):
+                    x_offset_img = np.int(slice_set[0] / scale)
+                    y_offset_img = np.int(slice_set[1] / scale)
+                    
+                    pred_set['polygons'] = []
+                    pred_set['resized_masks'] = []
 
-                preds.extend(list(pred_gen))
+                    for mask, box in zip(pred_set['detection_masks'], pred_set['proposal_boxes']):
+
+                        width = np.int((box[3] - box[1]) / scale)
+                        height = np.int((box[2] - box[0]) / scale)
+                        
+                        x_offset_box = box[1] / scale
+                        y_offset_box = box[0] / scale
+                        x_offset = x_offset_img + x_offset_box
+                        y_offset = y_offset_img + y_offset_box
+
+                        mask_arr = resize(np.array(mask), (height, width), mode='edge', 
+                                          anti_aliasing=True) > 0.5 # Must be binary
+                        pred_set['resized_masks'].append(mask_arr.astype(np.int))
+
+                        mask_poly = convert_mask_to_polygon(mask_arr, (x_offset, y_offset))
+                        pred_set['polygons'].append(mask_poly)  # polygon in whole-image pixel coordinates
+                                        
+                    # XXX: could add poly non-max suppression here?
+
+                    for key in ['detection_scores', 'detection_masks', 'proposal_boxes', 'proposal_boxes_normalized', 'polygons', 'resized_masks']:
+                        preds[key].extend(pred_set[key])
+                    
+                #preds.extend(pred_batch)
+                #XXX Needed?
+                #slices.extend(list(slice_batch))
                 logging.info(f'Finished processing at scale {scale}')
-                slices.extend(list(slice_batch))
 
-    ###########################
-    # Run non-max suppression to remove duplicates within one image
+            ###########################
+            # Run non-max suppression to remove duplicates within multiple scales of one image
 
-    # Non-max suppression for bounding boxes only
-    #selected_inds = tf.image.non_max_suppression(boxes, scores,
-    #                                             max_output_size=len(preds))
+            # Non-max suppression for bounding boxes only
+            #selected_inds = tf.image.non_max_suppression(boxes, scores,
+            #                                             max_output_size=len(preds))
 
-    # Run non-max suppression that uses crater polygon masks
-    preds_polygons = [pred['mask'] for pred in preds]
-    preds_confs = [pred['confidence'] for pred in preds]
+            # Run non-max suppression that uses crater polygon mask
+            selected_inds = poly_non_max_suppression(preds['polygons'], preds['detection_scores'])
+            
+            # Select data from TF Serving column format 
+            for key in ['detection_scores', 'detection_masks', 'proposal_boxes', 'proposal_boxes_normalized', 'resized_masks']:
+                preds[key] = [preds[key][ind] for ind in selected_inds]
+            
+            # Convert polygons from pixel coords to geospatial coords
+            preds['polygons'] = [geospatial_polygon_transform(preds['polygons'][ind], dataset.transform)
+                                 for ind in selected_inds]
 
-    selected_inds = poly_non_max_suppression(preds_polygons, preds_confs)
+        ###########################
+        # Loop over preds, determine properties, and store
+        preds['shape_props'] = []
+        for mask in preds['resized_masks']:
 
-    preds = [preds[ind] for ind in selected_inds]
-    slices = [slices[ind] for ind in selected_inds]
+            # Resize mask to original prediction bbox dimensions
 
-    ###########################
-    # Loop over preds, determine properties, and store
-    for (pred, mask), img_slice in zip(preds, slices):
+            # TODO: will need to bring along original image for gradient calcs
+            #grad_h, grad_v = calculate_region_grad(mask.astype(np.bool))
+            shape_props = calculate_shape_props(mask)
+            preds['shape_props'].append(shape_props)
 
-        # TODO: will need to bring along original image for gradient calcs
-        #grad_h, grad_v = calculate_region_grad(mask)
-        shape_props = calculate_shape_props(mask)
+            # Pass results back to database
+            session.add(Image(lat=msg_dict['projection_center_latitude'],
+                              lon=msg_dict['projection_center_longitude'],
+                              instrument_host_id=msg_dict['instrument_host_id'],
+                              instrument_id=msg_dict['instrument_id'],
+                              pds_id=msg_dict['product_id'],
+                              pds_version_id=msg_dict['pds_version_id'],
+                              subsolar_azimuth=msg_dict['sub_solar_azimuth']))
 
-        # Pass results back to database
-        session.add(Image(lat=msg_dict['projection_center_latitude'],
-                          lon=msg_dict['projection_center_longitude'],
-                          instrument_host_id=msg_dict['instrument_host_id'],
-                          instrument_id=msg_dict['instrument_id'],
-                          pds_id=msg_dict['product_id'],
-                          pds_version_id=msg_dict['pds_version_id'],
-                          subsolar_azimuth=msg_dict['sub_solar_azimuth']))
-
-        # TODO: update grad angle and image ID
-        session.add(Crater(geometry=pred['geom'],
-                           confidence=pred['confidence'],
-                           eccentricity=shape_props['eccentricity'],
-                           gradient_angle=-1,
-                           image_ID=-1))
+            # TODO: update grad angle and image ID
+            session.add(Crater(geometry=pred['geom'],
+                               confidence=pred['confidence'],
+                               eccentricity=shape_props['eccentricity'],
+                               gradient_angle=-1,
+                               image_ID=-1))
 
     session.commit()
     message.ack()
