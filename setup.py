@@ -31,7 +31,7 @@ setup(
     ],
     keywords='',
     entry_points={
-        'console_scripts': ['divdet=divdet.main:cli'],
+        'console_scripts': ['dd-inf=divdet.inference.main:cli'],
     },
     packages=find_packages(exclude=['docs', 'tests*']),
     include_package_data=True,

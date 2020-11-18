@@ -7,7 +7,7 @@ inputs:
   - {name: inference_output_directory,  type: GCSPath,  description: 'Local or GCS file path to directory for inference-ready model. E.g., `/path/to/export/dir/001`'}
 implementation:
   container:
-    image: gcr.io/divot-detect/divot-detect-training:v1-gpu
+    image: gcr.io/divot-detect/divot-detect-training:v4-gpu
     command: [python, /tensorflow/models/research/object_detection/export_inference_graph.py]
     args: [
       --input_type,                 {inputValue: inference_input_type},

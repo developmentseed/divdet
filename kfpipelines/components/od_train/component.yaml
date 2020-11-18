@@ -14,7 +14,7 @@ outputs:
   - {name: best_checkpoint,           type: GCSPath}
 implementation:
   container:
-    image: gcr.io/divot-detect/divot-detect-training:v1-gpu
+    image: gcr.io/divot-detect/divot-detect-training:v4-gpu
     command: [
       python, /launch.py,
       --pipeline_config_path,         {inputValue: pipeline_config_path},

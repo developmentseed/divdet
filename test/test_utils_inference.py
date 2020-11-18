@@ -2,8 +2,12 @@
 Tests for inference utilities.
 """
 
+import numpy as np
 from osgeo import ogr
-from divdet.inference.utils_inference import poly_non_max_suppression, poly_iou
+from divdet.inference.utils_inference import (poly_non_max_suppression, poly_iou,
+                                              get_slice_bounds, yield_windowed_reads_rasterio,
+                                              windowed_reads_rasterio)
+
 
 from numpy.testing import assert_array_equal, assert_almost_equal
 
@@ -52,3 +56,27 @@ class TestPolygons:
 
         picks = poly_non_max_suppression([rect1, rect1, rect1], [0.9, 0.99, 1])
         assert_array_equal(picks, [2])
+
+
+class TestSlicing:
+    """Tests for cutting an image into smaller slices prior to ML inference"""
+
+    def test_slice_coords(self):
+        image_size = (150, 150)
+        slice_size = (100, 100)
+        min_window_overlap = (50, 50)
+
+        # Test optimal slices where overlap fits evenly into image
+        slices = get_slice_bounds(image_size, slice_size, min_window_overlap)
+        assert_array_equal(slices, np.array([[0, 0, 100, 100],
+                                             [0, 50, 100, 100],
+                                             [50, 0, 100, 100],
+                                             [50, 50, 100, 100]]))
+
+        # Test case where slices overlap doesn't exactly match
+        image_size = (120, 120)
+        slices = get_slice_bounds(image_size, slice_size, min_window_overlap)
+        assert_array_equal(slices, np.array([[0, 0, 100, 100],
+                                             [0, 20, 100, 100],
+                                             [20, 0, 100, 100],
+                                             [20, 20, 100, 100]]))

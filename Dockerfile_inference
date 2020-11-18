@@ -4,7 +4,6 @@ WORKDIR /app
 
 RUN apt-get update && apt-get upgrade -y
 
-
 # Add source code
 COPY divdet/*.py ./divdet/
 COPY requirements.txt .

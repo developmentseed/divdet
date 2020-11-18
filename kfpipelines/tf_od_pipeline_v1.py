@@ -14,21 +14,19 @@ from kubernetes.client import V1Toleration
 
 ###################
 # Train Op
-comp_train_fname = op.join(os.environ['BUILDS_DIR'], 'divdet', 'kfpipelines',
-                           'components', 'od_train', 'component.yaml')
+comp_train_fname = op.join('components', 'od_train', 'component.yaml')
 train_component = components.load_component(filename=comp_train_fname)
 
 ###################
 # Export Op
-comp_export_fname = op.join(os.environ['BUILDS_DIR'], 'divdet', 'kfpipelines',
-                            'components', 'od_export', 'component.yaml')
+comp_export_fname = op.join('components', 'od_export', 'component.yaml')
 export_component = components.load_component(filename=comp_export_fname)
 
 ########################################
 # Define a toleration to a ML node taint 
 ml_tol = V1Toleration(effect='NoSchedule', key='mlUseOnly', operator='Equal', value='true')
 
-@dsl.pipeline(name='Divot detect OD API training/export',
+@dsl.pipeline(name='OD API training/export',
               description='A pipeline to train/export an instance segmentation model.')
 def divot_detect_pipeline(
         pipeline_config_path,

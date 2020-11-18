@@ -3,9 +3,11 @@ numpy
 tqdm
 scikit-image
 absl-py
-tensorflow==1.15.2
+tensorflow
 kfp
 sqlalchemy
 geoalchemy2
 psycopg2
 jupyter
+google-cloud-pubsub
+google-auth

@@ -17,7 +17,7 @@ RUN git clone --progress --depth 1 https://github.com/tensorflow/models.git /ten
 
 # Install object detection api dependencies
 RUN apt-get install -y protobuf-compiler python-pil python-lxml && \
-    pip install Cython contextlib2 pillow lxml jupyter matplotlib
+    pip install Cython contextlib2 pillow lxml jupyter matplotlib tf_slim scipy
 #RUN apt-get install python-tk -y
 
 # Install pycocoapi for instance segmentation utils

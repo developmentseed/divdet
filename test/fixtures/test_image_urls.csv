@@ -1,0 +1,3 @@
+image_url,scales,window_size,min_window_overlap,endpoint,batch_size,center_reproject,projection_url
+http://hirise.lpl.arizona.edu/PDS/RDR/AEB/ORB_000000_000099/AEB_000001_0150/AEB_000001_0150_RED.JP2,"[0.5, 1, 2]",1024,256,localhost,1,False,None
+http://hirise.lpl.arizona.edu/PDS/RDR/AEB/ORB_000000_000099/AEB_000002_0100/AEB_000002_0100_RED.JP2,"[0.5, 1, 2]",1024,256,localhost,1,False,None
