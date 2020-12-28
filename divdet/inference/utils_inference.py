@@ -10,6 +10,7 @@ from functools import partial
 import subprocess
 import warnings
 from itertools import zip_longest, repeat
+import logging
 
 import ogr
 import numpy as np
@@ -72,7 +73,8 @@ def calculate_shape_props(mask):
         mask for one crater).
     """
 
-    mask = mask.squeeze()
+    if mask.ndim == 3:
+        mask = mask.squeeze()
     if mask.ndim != 2:
         raise RuntimeError('`mask` must be 2D.')
     if mask.dtype != np.int:
@@ -138,7 +140,7 @@ def windowed_reads_rasterio(tif, slice_coords):
 
     # Loop through all windows and save if they don't exist
     windows = []
-    for (x_pt, y_pt, width, height) in tqdm(slice_coords, desc='Making windowed reads'):
+    for (x_pt, y_pt, width, height) in slice_coords:
         # Rasterio works in `xy` coords, not `ij`
         windows.append(tif.read(1, window=Window(y_pt, x_pt, width, height)))
 
@@ -157,7 +159,7 @@ def yield_windowed_reads_rasterio(tif, slice_coords):
     """
 
     # Loop through all windows and save if they don't exist
-    for (x_pt, y_pt, width, height) in tqdm(slice_coords, desc='Yielding windowed reads'):
+    for (x_pt, y_pt, width, height) in slice_coords:
         # Rasterio works in `xy` coords, not `ij`
         yield tif.read(1, window=Window(y_pt, x_pt, width, height))
 
@@ -190,7 +192,7 @@ def windowed_reads_numpy(arr, slice_coords):
     """
     windows = []
     # Store all windows
-    for (row, col, height, width) in tqdm(slice_coords, desc='Making windowed reads'):
+    for (row, col, height, width) in slice_coords:
         sub_arr = _cut_window(arr, row, col, width, height)
         windows.append(dict(image_data=sub_arr, row=row, col=col,
                             height=height, width=width))
@@ -214,7 +216,7 @@ def yield_windowed_reads_numpy(arr, slice_coords):
     """
 
     # Yield all windows
-    for (row, col, height, width) in tqdm(slice_coords, desc='Yielding windowed reads'):
+    for (row, col, height, width) in slice_coords:
         sub_arr  = _cut_window(arr, row, col, width, height)
 
         # Create a contiguous array (necessary for b64 encoding)
@@ -291,7 +293,7 @@ def non_max_suppression(bboxes, overlap_thresh=0.4):
     return picks
 
 
-def poly_non_max_suppression(polys, confidences, overlap_thresh=0.4,
+def poly_non_max_suppression(polys, confidences, overlap_thresh=0.2,
                              mp_processes=None, mp_chunksize=None):
     """Non-maximum suppression on OGR/GDAL polygons to find duplicates.
 
@@ -325,6 +327,15 @@ def poly_non_max_suppression(polys, confidences, overlap_thresh=0.4,
     if not mp_chunksize:
         mp_chunksize = 1
 
+    # Check for empty polygons
+    bad_poly_inds = [ind for ind in range(len(polys))
+                     if polys[ind].IsEmpty()]
+    if bad_poly_inds:
+        logging.warning('Found {len(bad_poly_inds)} indices with empty polygons')
+        for bad_ind in bad_poly_inds:
+            del polys[bad_ind]
+        confidences = confidences[np.invert(np.array(bad_poly_inds))]
+
     picks = []  # List with poly indices to keep
 
     # Order candidate confidences in ascending order
@@ -338,13 +349,10 @@ def poly_non_max_suppression(polys, confidences, overlap_thresh=0.4,
             break
 
         # Get the IOU between the kept polygon and all remaining polygons
-        overlap_iou = []
+        starmap_list = [(polys[picks[-1]], polys[ind], overlap_thresh)
+                       for ind in candidate_inds]
         with multiprocessing.Pool(processes=mp_processes) as pool:
-            overlap_iou = pool.starmap(poly_iou,
-                                       zip(repeat(polys[picks[-1]]),
-                                           [polys[ind] for ind in candidate_inds],
-                                           repeat(overlap_thresh)),
-                                       mp_chunksize)
+            overlap_iou = pool.starmap(poly_iou, starmap_list, mp_chunksize)
 
         # Remove indices of polygons that overlapped at or above the threshold
         #     by only keeping indices where `overlap_thresh` was not met
@@ -384,20 +392,21 @@ def poly_iou(poly1, poly2, thresh=None):
     return intersection / union
 
 
-def convert_mask_to_polygon(mask, xy_offset=(0, 0), simplify_tol=1., conf_thresh=0.5):
+def convert_mask_to_polygon(mask, xy_offset=(0, 0), simplify_tol=0.5,
+                            conf_thresh=0.5):
     """Convert a [0, 1] confidence mask to a GDAL polygon"""
 
     # Create padded mask
     padded_mask = np.zeros((mask.shape[0] + 2, mask.shape[1] + 2), dtype=np.float)
     padded_mask[1:-1, 1:-1] = mask
-    contours = find_contours(padded_mask, conf_thresh)
+    contours = find_contours(padded_mask, conf_thresh)  # Gives n (row, col) coordinates
 
     gdal_ring = ogr.Geometry(ogr.wkbLinearRing)
 
     if len(contours) > 1:
         raise RuntimeError('Found multiple mask contours for 1 crater.')
 
-    # Remove the padding and flip image from (y, x) to (x, y)
+    # Remove the padding and transition from (row, col) to (x, y)
     contour = np.fliplr(contours[0] - 1)
 
     # Convert predicted mask to polygon
@@ -413,10 +422,16 @@ def convert_mask_to_polygon(mask, xy_offset=(0, 0), simplify_tol=1., conf_thresh
     gdal_poly = ogr.Geometry(ogr.wkbPolygon)
     gdal_poly.AddGeometry(gdal_ring)
 
-    # TODO: Fix simplification
-    gdal_poly = gdal_poly.SimplifyPreserveTopology(simplify_tol)
+    # Attempt simplification
+    gdal_poly_simp = gdal_poly.Clone()
+    gdal_poly_simp.SimplifyPreserveTopology(simplify_tol)
 
-    return gdal_poly
+    # Return original polygon if there is an issue during simplification
+    if gdal_poly_simp.IsEmpty():
+        logging.warning('Simplified polygon is empty. Using original polygon.')
+        return gdal_poly
+
+    return gdal_poly_simp
 
 
 def geospatial_polygon_transform(poly, transform):
