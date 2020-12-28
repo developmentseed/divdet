@@ -33,7 +33,8 @@ from osgeo import gdal
 from divdet.inference.utils_inference import (
     iter_grouper, get_slice_bounds, yield_windowed_reads_numpy,
     windowed_reads_numpy, calculate_region_grad, calculate_shape_props,
-    poly_non_max_suppression, convert_mask_to_polygon)
+    poly_non_max_suppression, convert_mask_to_polygon,
+    geospatial_polygon_transform)
 from divdet.surface_feature import Crater, Image, Base
 
 flags.DEFINE_string('gcp_project', None, 'Google cloud project ID.')
@@ -42,7 +43,7 @@ flags.DEFINE_string('inference_endpoint', None, 'Address of prediction cluster.'
 #flags.DEFINE_integer('batch_size', 1, 'Number of images to run per inference batch.')
 flags.DEFINE_string('database_uri', None, 'Address of database to store prediction results.')
 flags.DEFINE_integer('max_outstanding_messages', 1, 'Number of messages to have in local backlog.')
-flags.DEFINE_float('nms_iou', 0.5, 'Non-max suppression IOU threshold.')
+flags.DEFINE_float('nms_iou', 0.2, 'Non-max suppression IOU threshold.')
 flags.DEFINE_string('service_account_fpath', None, 'Filepath to service account with pubsub access.')
 
 
@@ -86,9 +87,12 @@ def download_url_to_file(url, directory='/tmp', clobber=False, repeat_tries=5,
         try:
             req.raise_for_status()
             with open(save_fpath, 'wb') as write_file:
+                pbar = tqdm(total=int(req.headers['Content-Length']))
+
                 for chunk in req.iter_content(chunk_size=chunk_size):
                     if chunk: # filter out keep-alive new chunks
                         write_file.write(chunk)
+                        pbar.update(len(chunk))
             logging.info(f'Downloaded file from URL: {url}')
             return save_fpath
 
@@ -270,8 +274,8 @@ def proc_message(message, session):
 
     msg_dict['window_size'] = int(msg_dict['window_size'])
     msg_dict['min_window_overlap'] = int(msg_dict['min_window_overlap'])
-    msg_dict['projection_center_latitude'] = float(msg_dict['projection_center_latitude'])
-    msg_dict['projection_center_longitude'] = float(msg_dict['projection_center_longitude'])
+    msg_dict['center_latitude'] = float(msg_dict['center_latitude'])
+    msg_dict['center_longitude'] = float(msg_dict['center_longitude'])
     msg_dict['sub_solar_azimuth'] = float(msg_dict['sub_solar_azimuth'])
     msg_dict['batch_size'] = int(msg_dict['batch_size'])
 
@@ -281,8 +285,8 @@ def proc_message(message, session):
         # Download data and reproject if needed
         ##############################################
         # TODO: Move back to more generic url key name
-        logging.info('Downloading image: {}'.format(msg_dict['pds_jp2_url']))
-        image_fpath_orig = download_url_to_file(msg_dict['pds_jp2_url'],
+        logging.info('Downloading image: {}'.format(msg_dict['url']))
+        image_fpath_orig = download_url_to_file(msg_dict['url'],
                                                 directory=tmp_dir)
 
         '''
