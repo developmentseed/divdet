@@ -138,7 +138,7 @@ def pred_generator(generator, endpoint):
 
     ###################################
     # Create a batch of data to predict
-    for image_dict in tqdm(generator):
+    for image_dict in tqdm(generator, desc='Make inference requests.'):
 
         b64_image = arr_to_b64(image_dict['image_data'])
 
@@ -311,10 +311,10 @@ def proc_message(message, session):
         ###########################################################
         # Slice image appropriately and pass to prediction endpoint
         ###########################################################
-        preds = {'detection_scores': [], 'detection_masks': [], 'proposal_boxes': [], 
-             'proposal_boxes_normalized': [], 'polygons': [], 'resized_masks': []}
-        slices = []
-        with rasterio.open(geotiff_fpath) as dataset:
+        preds = {'detection_scores': [], 'detection_masks': [], 'proposal_boxes': [],
+                 'proposal_boxes_normalized': [], 'polygons': [], 'resized_masks': []}
+        #slices = []
+        with rasterio.open(image_fpath) as dataset:
             image = dataset.read(1)  # Read data from first band
             if image.dtype == np.uint16:
                 image = (image / 65535. * 255).astype(np.uint8)
@@ -324,87 +324,103 @@ def proc_message(message, session):
 
                 # Rescale image, round, and convert back to orig datatype
 
-                scaled_image = rescale(image, scale, mode='edge', preserve_range=True, 
+                scaled_image = rescale(image, scale, mode='edge', preserve_range=True,
                                        anti_aliasing=True).round().astype(image.dtype)
 
                 # Calculate slice bounds and create generator
                 slice_bounds = get_slice_bounds(
                     scaled_image.shape,
                     slice_size=(msg_dict['window_size'], msg_dict['window_size']),
-                    min_window_overlap=(msg_dict['min_window_overlap'], msg_dict['min_window_overlap']))
+                    min_window_overlap=(msg_dict['min_window_overlap'],
+                                        msg_dict['min_window_overlap']))
 
                 logging.info('Created %s slices.', (len(slice_bounds)))
                 slice_batch = windowed_reads_numpy(scaled_image, slice_bounds)
 
-                # Generate predictions predictions
-                pred_gen = pred_generator(slice_batch,
-                                          msg_dict['prediction_endpoint'])
+                # Generate predictions
+                if msg_dict['batch_size'] > 1:
+                    pred_gen = pred_generator_batched(slice_batch,
+                                                      msg_dict['prediction_endpoint'],
+                                                      msg_dict['batch_size'])
+                else:
+                    pred_gen = pred_generator(slice_batch,
+                                              msg_dict['prediction_endpoint'])
                 pred_batch = list(pred_gen)
-                
-                
+
                 # Convert predictions to polygon in orig image coordinate frame
                 for pred_set, slice_set in zip(pred_batch, slice_bounds):
-                    x_offset_img = np.int(slice_set[0] / scale)
-                    y_offset_img = np.int(slice_set[1] / scale)
-                    
+                    y_offset_img = np.int(slice_set[0] / scale)
+                    x_offset_img = np.int(slice_set[1] / scale)
+
                     pred_set['polygons'] = []
                     pred_set['resized_masks'] = []
 
                     for mask, box in zip(pred_set['detection_masks'], pred_set['proposal_boxes']):
 
-                        width = np.int((box[3] - box[1]) / scale)
-                        height = np.int((box[2] - box[0]) / scale)
-                        
+                        # Get width/height of image and compute offset of slice
+                        width = np.int(np.around((box[3] - box[1]) / scale))
+                        height = np.int(np.around((box[2] - box[0]) / scale))
+
                         x_offset_box = box[1] / scale
                         y_offset_box = box[0] / scale
                         x_offset = x_offset_img + x_offset_box
                         y_offset = y_offset_img + y_offset_box
 
-                        mask_arr = resize(np.array(mask), (height, width), mode='edge', 
+                        mask_arr = resize(np.array(mask), (height, width), mode='edge',
                                           anti_aliasing=True) > 0.5 # Must be binary
                         pred_set['resized_masks'].append(mask_arr.astype(np.int))
 
+                        # Generate polygon (with geospatial offset) from mask
                         mask_poly = convert_mask_to_polygon(mask_arr, (x_offset, y_offset))
                         pred_set['polygons'].append(mask_poly)  # polygon in whole-image pixel coordinates
-                                        
-                    # XXX: could add poly non-max suppression here?
 
-                    for key in ['detection_scores', 'detection_masks', 'proposal_boxes', 'proposal_boxes_normalized', 'polygons', 'resized_masks']:
+                    for key in ['detection_scores', 'detection_masks',
+                                'proposal_boxes', 'proposal_boxes_normalized',
+                                'polygons', 'resized_masks']:
                         preds[key].extend(pred_set[key])
-                    
+
                 #preds.extend(pred_batch)
                 #XXX Needed?
                 #slices.extend(list(slice_batch))
                 logging.info(f'Finished processing at scale {scale}')
 
             ###########################
-            # Run non-max suppression to remove duplicates within multiple scales of one image
+            # Run non-max suppression to remove duplicates in multiple scales of one image
+            logging.info('Running across-scale non-max suppression.')
 
             # Non-max suppression for bounding boxes only
             #selected_inds = tf.image.non_max_suppression(boxes, scores,
             #                                             max_output_size=len(preds))
 
             # Run non-max suppression that uses crater polygon mask
-            selected_inds = poly_non_max_suppression(preds['polygons'], preds['detection_scores'])
-            
-            # Select data from TF Serving column format 
-            for key in ['detection_scores', 'detection_masks', 'proposal_boxes', 'proposal_boxes_normalized', 'resized_masks']:
+            logging.info(f"Found {len(preds['polygons'])} polygon predictions.")
+            selected_inds = poly_non_max_suppression(preds['polygons'],
+                                                     preds['detection_scores'])
+            logging.info(f"Keeping {len(selected_inds)} polygon predictions.")
+
+            # Select data from TF Serving column format
+            for key in ['detection_scores', 'detection_masks', 'proposal_boxes',
+                        'proposal_boxes_normalized', 'resized_masks']:
                 preds[key] = [preds[key][ind] for ind in selected_inds]
-            
+
             # Convert polygons from pixel coords to geospatial coords
-            preds['polygons'] = [geospatial_polygon_transform(preds['polygons'][ind], dataset.transform)
-                                 for ind in selected_inds]
+            preds['polygons'] = [geospatial_polygon_transform(preds['polygons'][ind],
+                                 dataset.transform) for ind in selected_inds]
+
+            # Select data from TF Serving row format
+            #preds = [preds[ind] for ind in selected_inds]
+            #slices = [slices[ind] for ind in selected_inds]
 
         ###########################
         # Loop over preds, determine properties, and store
         preds['shape_props'] = []
-        for mask in preds['resized_masks']:
+        for pi in range(len(preds['detection_scores'])):
 
             # Resize mask to original prediction bbox dimensions
 
             # TODO: will need to bring along original image for gradient calcs
-            #grad_h, grad_v = calculate_region_grad(mask.astype(np.bool))
-            shape_props = calculate_shape_props(mask)
+            #grad_h, grad_v = calculate_region_grad(preds['resized_masks'][pi].astype(np.bool))
+            shape_props = calculate_shape_props(preds['resized_masks'][pi])
             preds['shape_props'].append(shape_props)
 
             # Pass results back to database
@@ -417,12 +433,13 @@ def proc_message(message, session):
                               subsolar_azimuth=msg_dict['sub_solar_azimuth']))
 
             # TODO: update grad angle and image ID
-            session.add(Crater(geometry=pred['geom'],
-                               confidence=pred['confidence'],
-                               eccentricity=shape_props['eccentricity'],
+            session.add(Crater(geometry=preds['polygons'][pi],
+                               confidence=preds['detection_scores'][pi],
+                               eccentricity=preds['shape_props'][pi]['eccentricity'],
                                gradient_angle=-1,
                                image_ID=-1))
 
+        logging.info('Processing complete for {image_fpath}.')
     session.commit()
     message.ack()
 
