@@ -14,10 +14,11 @@ from absl import flags, app, logging
 
 flags.DEFINE_string('pipeline_config_path', None, 'Local or GCS path to the OD model config.')
 flags.DEFINE_string('model_dir', None, 'Local or GCS path to location for saving model checkpoints.')
+flags.DEFINE_string('checkpoint_every_n', None, 'Number of steps between checkpoints.')
 flags.DEFINE_integer('num_train_steps', None, 'Total number of training steps to take.')
 flags.DEFINE_integer('sample_1_of_n_eval_examples', None,
                      'During evaluation, sample 1/n of the total samples. E.g., "4" means use a quarter of the samples.')
-flags.DEFINE_string('eval_dir', None, 'Local or GCS path to location for evaluation. Usually `model_dir/eval_0`')
+flags.DEFINE_string('eval_dir', None, 'Local or GCS path to location for evaluation. Usually `model_dir/eval`')
 flags.DEFINE_string('eval_checkpoint_metric', None, 'Name of loss metric used  to select the best checkpoint.')
 flags.DEFINE_enum('metric_objective_type', None, ['min', 'max'], 'Select `eval_checkpoint_metric` based on `max` or `min`.')
 
@@ -35,14 +36,15 @@ def init_tensorboard(model_dir):
     logging.info('Finished initializing tensorboard directory.')
 
 
-def run_training(pipeline_config_path, model_dir, num_train_steps,
+def run_training(pipeline_config_path, model_dir, checkpoint_every_n, num_train_steps,
                  sample_1_of_n_eval_examples):
     """Run a complete training experiment for TF's OD API"""
 
     logging.info('Starting model training process.')
-    with subprocess.Popen(['python', '/tensorflow/models/research/object_detection/model_main.py',
+    with subprocess.Popen(['python', '/tensorflow/models/research/object_detection/model_main_tf2.py',
                            '--pipeline_config_path', pipeline_config_path,
                            '--model_dir', model_dir,
+                           '--checkpoint_every_n', checkpoint_every_n,
                            '--num_train_steps', str(num_train_steps),  # Popen takes only string inputs
                            '--sample_1_of_n_eval_examples', str(sample_1_of_n_eval_examples),
                            '--alsologtostderr'],
@@ -60,6 +62,33 @@ def run_training(pipeline_config_path, model_dir, num_train_steps,
         raise RuntimeError(f'Error at runtime with code: {proc.returncode}.')
     else:
         print('Finished training successfully.')
+
+
+def run_evaluation(pipeline_config_path, model_dir,
+                   sample_1_of_n_eval_examples):
+    """Run evaluation on saved checkpoints using TF's OD API"""
+
+    logging.info('Starting model evaluation process.')
+    with subprocess.Popen(['python', '/tensorflow/models/research/object_detection/model_main_tf2.py',
+                           '--pipeline_config_path', pipeline_config_path,
+                           '--checkpoint_dir', model_dir,  #Also pass this in to the checkpoint dir to look here for model checkpoints
+                           '--model_dir', model_dir,
+                           '--sample_1_of_n_eval_examples', str(sample_1_of_n_eval_examples),
+                           '--alsologtostderr'],
+                          bufsize=1,
+                          stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE,
+                          universal_newlines=True) as proc:
+
+        for line in proc.stderr:
+            print(line, end='')
+        for line in proc.stdout:
+            print(line, end='')
+
+    if proc.returncode != 0:
+        raise RuntimeError(f'Error at runtime with code: {proc.returncode}.')
+    else:
+        print('Finished evaluation successfully.')
 
 
 def identify_best_checkpoint(metric_name, objective_type, ckpt_dir):
@@ -108,15 +137,18 @@ def main(_):
     # Run training
     run_training(pipeline_config_path=FLAGS.pipeline_config_path,
                  model_dir=FLAGS.model_dir,
+                 checkpoint_every_n=FLAGS.checkpoint_every_n,
                  num_train_steps=FLAGS.num_train_steps,
                  sample_1_of_n_eval_examples=FLAGS.sample_1_of_n_eval_examples)
+
+    run_evaluation(pipeline_config_path, model_dir,
+                   sample_1_of_n_eval_examples)
 
     # Get the best checkpoint and its performance
     best_ckpt, best_perf = \
             identify_best_checkpoint(metric_name=FLAGS.eval_checkpoint_metric,
                                      objective_type=FLAGS.metric_objective_type,
                                      ckpt_dir=FLAGS.eval_dir)
-
     # Write the best checkpoint to disk
     logging.info(f'Best checkpoint file: {best_ckpt}')
     with open('/output.txt', 'w') as f:
