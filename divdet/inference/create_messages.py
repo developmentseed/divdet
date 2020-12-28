@@ -29,7 +29,7 @@ flags.DEFINE_string('scales', '[0.25, 0.5, 1]', 'List of scales to use when mult
 flags.DEFINE_integer('batch_size', 1, 'Number of windows to send to prediction endpoint at a time.')
 flags.DEFINE_integer('window_size', 1024, 'Size of one side of a square to use for image windowing.')
 flags.DEFINE_integer('min_window_overlap', 256, 'Number of pixels to overlap between windows.')
-flags.DEFINE_string('prediction_endpoint', 'http://localhost:8501/v1/models/divdet:predict', 'Path to send images to for prediction.')
+flags.DEFINE_string('prediction_endpoint', 'http://localhost:8501/v1/models/divdet-inference:predict', 'Path to send images to for prediction.')
 flags.DEFINE_bool('center_reproject', False, 'Whether or not to center reproject the image.')
 
 
