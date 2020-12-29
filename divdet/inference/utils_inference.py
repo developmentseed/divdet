@@ -460,7 +460,7 @@ def geospatial_polygon_transform(poly, transform):
         gdal_ring.AddPoint(*pt)
 
     # Create polygon
-    poly_transformed = ogr.Geometry(ogr.wkbPolygon)
-    poly_transformed.AddGeometry(gdal_ring)
+    gdal_poly = ogr.Geometry(ogr.wkbPolygon)
+    gdal_poly.AddGeometry(gdal_ring)
 
-    return poly_transformed
+    return gdal_poly
