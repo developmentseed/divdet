@@ -354,8 +354,11 @@ def proc_message(message, session):
                     pred_gen = pred_generator_batched(slice_batch,
                                                       msg_dict['prediction_endpoint'],
                                                       msg_dict['batch_size'])
-                    pred_batch = [item for sublist in list(pred_gen)
-                                  for item in sublist]
+                    #pred_batch_multi = list(pred_gen)
+                    pred_batch = [item for sublist in pred_gen for item in sublist]
+
+                    #flat_list = [item for sublist in regular_list for item in sublist]
+
                 else:
                     pred_gen = pred_generator(slice_batch,
                                               msg_dict['prediction_endpoint'])
@@ -453,7 +456,7 @@ def proc_message(message, session):
                                confidence=preds['detection_scores'][pi],
                                eccentricity=preds['shape_props'][pi]['eccentricity'],
                                gradient_angle=-1,
-                               image_ID=-1))
+                               image_id=-1))
 
         logging.info('Processing complete for {image_fpath}.')
     session.commit()
