@@ -142,7 +142,7 @@ def pred_generator(generator, endpoint):
 
     ###################################
     # Create a batch of data to predict
-    for image_dict in tqdm(generator, desc='Make inference requests.'):
+    for image_dict in tqdm(generator, desc='Making inference requests.'):
 
         b64_image = arr_to_b64(image_dict['image_data'])
 
@@ -428,12 +428,12 @@ def proc_message(message, session):
             preds['shape_props'].append(shape_props)
 
             # Pass results back to database
-            session.add(Image(lat=msg_dict['projection_center_latitude'],
-                              lon=msg_dict['projection_center_longitude'],
-                              instrument_host_id=msg_dict['instrument_host_id'],
+            session.add(Image(lat=msg_dict['center_latitude'],
+                              lon=msg_dict['center_longitude'],
+                              instrument_host_id=msg_dict.get('instrument_host_id', 'None'),
                               instrument_id=msg_dict['instrument_id'],
                               pds_id=msg_dict['product_id'],
-                              pds_version_id=msg_dict['pds_version_id'],
+                              pds_version_id=msg_dict.get('pds_version_id', 'None'),
                               subsolar_azimuth=msg_dict['sub_solar_azimuth']))
 
             # TODO: update grad angle and image ID
