@@ -248,10 +248,18 @@ def pred_generator_batched(generator, endpoint, batch_size=1):
         #############################
         # Store and return prediction
         for pi, pred_dict in enumerate(pred_batch):
+            '''
             pred_dict['detection_score'] = resp_outputs['detection_scores'][pi]  # Probability each proposal corresponds to an object
             pred_dict['detection_mask'] = resp_outputs['detection_masks'][pi]  # Mask for each proposal. Needs to be resized from (33, 33)
             pred_dict['proposal_box'] = resp_outputs['proposal_boxes'][pi]  # Box coordinates for each object in orig image coords
             pred_dict['proposal_box_normalized'] = resp_outputs['proposal_boxes_normalized'][pi]  # Box coordinates for each object in normalized coords
+            '''
+
+            n_good_inds = int(np.sum(np.array(resp_outputs['detection_scores'][0]) > 0))
+            pred_dict['detection_scores'] = resp_outputs['detection_scores'][0][:n_good_inds]  # Probability each proposal corresponds to an object
+            pred_dict['detection_masks'] = resp_outputs['detection_masks'][0][:n_good_inds]  # Mask for each proposal. Needs to be resized from (33, 33)
+            pred_dict['proposal_boxes'] = resp_outputs['proposal_boxes'][0][:n_good_inds]  # Box coordinates for each object in orig image coords
+            pred_dict['proposal_boxes_normalized'] = resp_outputs['proposal_boxes_normalized'][0][:n_good_inds]  # Box coordinates for each object in normalized coords
 
         yield pred_batch
 
@@ -346,10 +354,14 @@ def proc_message(message, session):
                     pred_gen = pred_generator_batched(slice_batch,
                                                       msg_dict['prediction_endpoint'],
                                                       msg_dict['batch_size'])
+                    pred_batch = [item for sublist in list(pred_gen)
+                                  for item in sublist]
                 else:
                     pred_gen = pred_generator(slice_batch,
                                               msg_dict['prediction_endpoint'])
-                pred_batch = list(pred_gen)
+                    pred_batch = list(pred_gen)
+
+
 
                 # Convert predictions to polygon in orig image coordinate frame
                 for pred_set, slice_set in zip(pred_batch, slice_bounds):
