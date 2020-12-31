@@ -228,6 +228,8 @@ def pred_generator_batched(generator, endpoint, batch_size=1):
         instances = []  # List that will hold b64 images to be sent to endpoint
 
         for image_dict in image_batch:
+            if image_dict is None:
+                continue
             b64_image = arr_to_b64(image_dict['image_data'])
             #b64_image = arr_to_b64(image_dict.pop('image_data'))
             pred_batch.append(image_dict)
