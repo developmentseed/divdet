@@ -87,12 +87,12 @@ def download_url_to_file(url, directory='/tmp', clobber=False, repeat_tries=5,
         try:
             req.raise_for_status()
             with open(save_fpath, 'wb') as write_file:
-                pbar = tqdm(total=int(req.headers['Content-Length'] / 1e6))
+                pbar = tqdm(total=int(req.headers['Content-Length']))
 
                 for chunk in req.iter_content(chunk_size=chunk_size):
                     if chunk: # filter out keep-alive new chunks
                         write_file.write(chunk)
-                        pbar.update(len(chunk) / 1e6)
+                        pbar.update(len(chunk))
             logging.info(f'Downloaded file from URL: {url}')
             return save_fpath
 
@@ -416,7 +416,7 @@ def proc_message(message, session):
             logging.info(f"Found {len(preds['polygons'])} polygon predictions.")
             selected_inds = poly_non_max_suppression(preds['polygons'],
                                                      preds['detection_scores'],
-                                                     mp_chunksize=4)
+                                                     mp_chunksize=8)
 
             # Select data from TF Serving column format
             for key in ['detection_scores', 'detection_masks', 'proposal_boxes',
