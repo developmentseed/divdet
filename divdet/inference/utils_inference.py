@@ -350,7 +350,7 @@ def poly_non_max_suppression(polys, confidences, overlap_thresh=0.2,
 
         # Get the IOU between the kept polygon and all remaining polygons
         starmap_list = [(polys[picks[-1]], polys[ind], overlap_thresh)
-                       for ind in candidate_inds]
+                        for ind in candidate_inds]
         with multiprocessing.Pool(processes=mp_processes) as pool:
             overlap_iou = pool.starmap(poly_iou, starmap_list, mp_chunksize)
 
@@ -383,6 +383,8 @@ def poly_iou(poly1, poly2, thresh=None):
     """
 
     intersection = poly1.Intersection(poly2).Area()
+    if intersection == 0:
+        return False
     union = poly1.Union(poly2).Area()
 
     # If threshold was provided, return if IOU met the threshold
@@ -454,13 +456,18 @@ def geospatial_polygon_transform(poly, transform):
     gdal_ring = ogr.Geometry(ogr.wkbLinearRing)
 
     # Get single geometry from the poly object
+    print('pt 1')
     geom = poly.GetGeometryRef(0)
     for pi in range(geom.GetPointCount()):
         pt = transform * geom.GetPoint(pi)[:2]  # Only take first 2 coords in case 3 exist
         gdal_ring.AddPoint(*pt)
+    print('pt 2')
 
     # Create polygon
     gdal_poly = ogr.Geometry(ogr.wkbPolygon)
     gdal_poly.AddGeometry(gdal_ring)
+
+    gdal_poly.FlattenTo2D()
+    print('pt 3')
 
     return gdal_poly
