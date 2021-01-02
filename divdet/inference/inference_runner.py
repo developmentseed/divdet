@@ -87,12 +87,12 @@ def download_url_to_file(url, directory='/tmp', clobber=False, repeat_tries=5,
         try:
             req.raise_for_status()
             with open(save_fpath, 'wb') as write_file:
-                pbar = tqdm(total=int(req.headers['Content-Length']))
+                pbar = tqdm(total=int(req.headers['Content-Length'] / 1e6))
 
                 for chunk in req.iter_content(chunk_size=chunk_size):
                     if chunk: # filter out keep-alive new chunks
                         write_file.write(chunk)
-                        pbar.update(len(chunk))
+                        pbar.update(len(chunk) / 1e6)
             logging.info(f'Downloaded file from URL: {url}')
             return save_fpath
 
