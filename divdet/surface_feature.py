@@ -79,7 +79,8 @@ class Crater(Base):
 
     # Add table index according to
     #   https://stackoverflow.com/a/6627154
-    __table_args__ = (Index('geom_index', 'geometry', 'confidence'), )
+    # Needed?
+    #__table_args__ = (Index('geom_index', 'geometry', 'confidence'), )
 
     def __repr__(self):
         """Define string representation."""
@@ -103,7 +104,7 @@ class Image(Base):
         Planetary Data System unique ID of the image (e.g., 'B04_011293_1265_XN_53S071W')
     pds_version_id: str
         Version of the record (e.g., 1, 2)
-    subsolar_azimuth: float
+    sub_solar_azimuth: float
         Direction of sun in image CCW from right.
     """
 
@@ -114,14 +115,14 @@ class Image(Base):
     instrument_id = Column(String)
     pds_id = Column(String)
     pds_version_id = Column(String)
-    subsolar_azimuth = Column(Float)
+    sub_solar_azimuth = Column(Float)
 
     # Add a relationship with the Crater class
     craters = relationship('Crater', back_populates='image', cascade="all, delete, delete-orphan")
 
     def __repr__(self):
         """Define string representation."""
-        return f'<Image({self.instrument_host_id}:{self.camera}, pds_id={self.pds_id})>'
+        return f'<Image({self.instrument_host_id}:{self.instrument_id}, pds_id={self.pds_id})>'
 
 
 '''
