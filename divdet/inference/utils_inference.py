@@ -349,10 +349,15 @@ def poly_non_max_suppression(polys, confidences, overlap_thresh=0.2,
             break
 
         # Get the IOU between the kept polygon and all remaining polygons
-        starmap_list = [(polys[picks[-1]], polys[ind], overlap_thresh)
+        starmap_list = [(polys[picks[-1]].Clone(), polys[ind].Clone(), overlap_thresh)
                         for ind in candidate_inds]
-        with multiprocessing.Pool(processes=mp_processes) as pool:
-            overlap_iou = pool.starmap(poly_iou, starmap_list, mp_chunksize)
+
+        overlap_iou = []
+        for ind in candidate_inds:
+            overlap_iou.append(poly_iou(polys[picks[-1]], polys[ind], overlap_thresh))
+
+        #with multiprocessing.Pool(processes=mp_processes) as pool:
+        #    overlap_iou = pool.starmap(poly_iou, starmap_list, mp_chunksize)
 
         # Remove indices of polygons that overlapped at or above the threshold
         #     by only keeping indices where `overlap_thresh` was not met
@@ -382,16 +387,20 @@ def poly_iou(poly1, poly2, thresh=None):
         threshold value was met.
     """
 
-    intersection = poly1.Intersection(poly2).Area()
+    intersection = poly1.Intersection(poly2)
+    intersection_area = intersection.Area()
+
     if intersection == 0:
         return False
-    union = poly1.Union(poly2).Area()
+
+    union = poly1.Union(poly2)
+    union_area = union.Area()
 
     # If threshold was provided, return if IOU met the threshold
     if thresh is not None:
-        return (intersection / union) >= thresh
+        return (intersection_area / union_area) >= thresh
 
-    return intersection / union
+    return intersection_area / union_area
 
 
 def convert_mask_to_polygon(mask, xy_offset=(0, 0), simplify_tol=0.5,
