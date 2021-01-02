@@ -305,7 +305,6 @@ def proc_message(message, session):
             proj_fpath = download_url_to_file(msg_dict['projection_url'],
                                               directory=tmp_dir)
         '''
-        logging.info('Download complete.')
 
         if msg_dict['center_reproject'] == 'True':
             image_fpath = op.join(op.splitext(image_fpath_orig)[0] + '_warp',
@@ -416,8 +415,8 @@ def proc_message(message, session):
             # Run non-max suppression that uses crater polygon mask
             logging.info(f"Found {len(preds['polygons'])} polygon predictions.")
             selected_inds = poly_non_max_suppression(preds['polygons'],
-                                                     preds['detection_scores'])
-            logging.info(f"Keeping {len(selected_inds)} polygon predictions.")
+                                                     preds['detection_scores'],
+                                                     mp_chunksize=4)
 
             # Select data from TF Serving column format
             for key in ['detection_scores', 'detection_masks', 'proposal_boxes',
@@ -425,16 +424,26 @@ def proc_message(message, session):
                 preds[key] = [preds[key][ind] for ind in selected_inds]
 
             # Convert polygons from pixel coords to geospatial coords
-            preds['polygons'] = [geospatial_polygon_transform(preds['polygons'][ind],
-                                 dataset.transform) for ind in selected_inds]
+            preds['polygons'] = [geospatial_polygon_transform(preds['polygons'][ind], dataset.transform)
+                                 for ind in selected_inds]
+            logging.info(f"After NMS, {len(preds['polygons'])} predictions remain.")
 
-            # Select data from TF Serving row format
-            #preds = [preds[ind] for ind in selected_inds]
-            #slices = [slices[ind] for ind in selected_inds]
 
         ###########################
-        # Loop over preds, determine properties, and store
-        preds['shape_props'] = []
+        # Save image and craters to DB
+
+        # Save image first to get the image ID
+        image_obj = Image(lon=msg_dict['center_longitude'],
+                          lat=msg_dict['center_latitude'],
+                          instrument_host_id=msg_dict.get('instrument_host_id', 'None'),
+                          instrument_id=msg_dict['instrument_id'],
+                          pds_id=msg_dict['product_id'],
+                          pds_version_id=msg_dict.get('pds_version_id', 'None'),
+                          sub_solar_azimuth=msg_dict['sub_solar_azimuth'])
+        session.add(image_obj)
+        session.commit()
+
+        # Loop over predicted craters, determine properties, and store
         for pi in range(len(preds['detection_scores'])):
 
             # Resize mask to original prediction bbox dimensions
@@ -442,26 +451,16 @@ def proc_message(message, session):
             # TODO: will need to bring along original image for gradient calcs
             #grad_h, grad_v = calculate_region_grad(preds['resized_masks'][pi].astype(np.bool))
             shape_props = calculate_shape_props(preds['resized_masks'][pi])
-            preds['shape_props'].append(shape_props)
 
-            # Pass results back to database
-            session.add(Image(lat=msg_dict['center_latitude'],
-                              lon=msg_dict['center_longitude'],
-                              instrument_host_id=msg_dict.get('instrument_host_id', 'None'),
-                              instrument_id=msg_dict['instrument_id'],
-                              pds_id=msg_dict['product_id'],
-                              pds_version_id=msg_dict.get('pds_version_id', 'None'),
-                              subsolar_azimuth=msg_dict['sub_solar_azimuth']))
-
-            # TODO: update grad angle and image ID
-            session.add(Crater(geometry=preds['polygons'][pi],
+            export_geom = preds['polygons'][pi].ExportToWkt()
+            session.add(Crater(geometry=export_geom,
                                confidence=preds['detection_scores'][pi],
-                               eccentricity=preds['shape_props'][pi]['eccentricity'],
+                               eccentricity=shape_props['eccentricity'],
                                gradient_angle=-1,
-                               image_id=-1))
+                               image_id=image_obj.id))
 
-        logging.info('Processing complete for {image_fpath}.')
-    session.commit()
+        session.commit()
+        logging.info(f'Processing complete for {image_fpath}.')
     message.ack()
 
 
