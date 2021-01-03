@@ -267,14 +267,14 @@ def pred_generator_batched(generator, endpoint, batch_size=1):
 
 
 def proc_message_debug(message, session, endpoint=None):
-    logging.info('Received message: {}'.format(message))
+    logging.info('\nReceived message: {}'.format(message))
 
     message.ack()
 
 
 def proc_message(message, session):
     """Callback to  process an image"""
-    logging.info('Received message: {}'.format(message.data))
+    logging.info('\nReceived message: {}'.format(message.data))
     msg_dict = dict(message.attributes)
 
     if not message.attributes['scales']:
@@ -368,7 +368,7 @@ def proc_message(message, session):
 
                 # Convert predictions to polygon in orig image coordinate frame
                 for pred_set, slice_set in tqdm(zip(pred_batch, slice_bounds),
-                                                desc='\tConvert pred batch masks to polygons'):
+                                                desc='\tConvert slice pred batch masks to polygons'):
                     y_offset_img = np.int(slice_set[0] / scale)
                     x_offset_img = np.int(slice_set[1] / scale)
 
@@ -403,7 +403,7 @@ def proc_message(message, session):
                     selected_inds = tf.image.non_max_suppression(pred_set['proposal_boxes_normalized'],
                                                                  pred_set['detection_scores'],
                                                                  iou_threshold=0.5,
-                                                                 max_output_size=len(pred_set))
+                                                                 max_output_size=len(pred_set['detection_scores']))
 
                     for key in ['detection_scores', 'detection_masks',
                                 'proposal_boxes', 'proposal_boxes_normalized',
@@ -429,7 +429,7 @@ def proc_message(message, session):
             selected_inds = tf.image.non_max_suppression(preds['proposal_boxes_normalized'],
                                                          preds['detection_scores'],
                                                          iou_threshold=0.5,
-                                                         max_output_size=len(preds))
+                                                         max_output_size=len(preds['detection_scores']))
             '''
             selected_inds = poly_non_max_suppression(preds['polygons'],
                                                      preds['detection_scores'],
