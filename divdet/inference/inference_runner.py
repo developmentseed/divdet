@@ -401,15 +401,18 @@ def proc_message(message, session):
                                                              mp_processes=None,
                                                              mp_chunksize=64)
                     '''
+                    '''
                     selected_inds = tf.image.non_max_suppression(pred_set['proposal_boxes_normalized'],
                                                                  pred_set['detection_scores'],
                                                                  iou_threshold=0.5,
                                                                  max_output_size=len(pred_set['detection_scores'])).numpy()
 
+                    '''
                     for key in ['detection_scores', 'detection_masks',
                                 'proposal_boxes', 'proposal_boxes_normalized',
                                 'polygons', 'resized_masks']:
-                        preds[key].extend([pred_set[key][ind] for ind in selected_inds])
+                        #preds[key].extend([pred_set[key][ind] for ind in selected_inds])
+                        preds[key].extend(pred_set[key])
 
                 #preds.extend(pred_batch)
                 #XXX Needed?
