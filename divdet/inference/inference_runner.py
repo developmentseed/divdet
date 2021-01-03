@@ -56,7 +56,7 @@ overload_errors = ['<urlopen error [Errno 60] ETIMEDOUT>',
 
 
 def download_url_to_file(url, directory='/tmp', clobber=False, repeat_tries=5,
-                         chunk_size=10485760):
+                         chunk_size=2097152):
     """Download a url to disk
 
     Parameters
@@ -83,7 +83,7 @@ def download_url_to_file(url, directory='/tmp', clobber=False, repeat_tries=5,
         raise ValueError(f'File exists at {save_fpath}')
 
     # Use `stream=True` for large files
-    with requests.get(url, stream=True, allow_redirects=True) as req:
+    with requests.get(url, stream=True, allow_redirects=True, timeout=20) as req:
         try:
             req.raise_for_status()
             with open(save_fpath, 'wb') as write_file:
