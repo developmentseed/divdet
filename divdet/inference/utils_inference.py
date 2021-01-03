@@ -224,7 +224,7 @@ def yield_windowed_reads_numpy(arr, slice_coords):
         yield dict(image_data=sub_arr, row=row, col=col, height=height, width=width)
 
 
-def non_max_suppression(bboxes, overlap_thresh=0.4):
+def non_max_suppression(bboxes, overlap_thresh=0.2):
     """Run non-maximum suppression to avoid duplicate detections.
     Sorts by confidence value
 
@@ -366,7 +366,6 @@ def poly_non_max_suppression(polys, confidences, overlap_thresh=0.2,
         #for ind in candidate_inds:
         #    overlap_iou.append(poly_iou(polys[picks[-1]], polys[ind], overlap_thresh))
 
-        # Try with pass in poly_iou
         # Tips/gotchas for gdal polys
         # Higher confidence
         # Explicit deletes
@@ -404,14 +403,13 @@ def poly_iou(poly1, poly2, thresh=None):
     poly1 = ogr.CreateGeometryFromWkb(poly1)
     poly2 = ogr.CreateGeometryFromWkb(poly2)
 
-    intersection = poly1.Intersection(poly2)
-    intersection_area = intersection.Area()
-
-    if intersection == 0:
+    if not poly1.Intersects(poly2):
         return False
 
-    union = poly1.Union(poly2)
-    union_area = union.Area()
+    intersection_area = poly1.Intersection(poly2).Area()
+    #intersection_area = intersection.Area()
+    union_area = poly1.Union(poly2).Area()
+    #union_area = union.Area()
 
     # If threshold was provided, return if IOU met the threshold
     if thresh is not None:
