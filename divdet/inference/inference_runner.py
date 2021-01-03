@@ -394,10 +394,10 @@ def proc_message(message, session):
                         mask_poly = convert_mask_to_polygon(mask_arr, (x_offset, y_offset))
                         pred_set['polygons'].append(mask_poly)  # polygon in whole-image pixel coordinates
 
-                        selected_inds = poly_non_max_suppression(pred_set['polygons'],
-                                                                 pred_set['detection_scores'],
-                                                                 mp_processes=None,
-                                                                 mp_chunksize=64)
+                    selected_inds = poly_non_max_suppression(pred_set['polygons'],
+                                                             pred_set['detection_scores'],
+                                                             mp_processes=None,
+                                                             mp_chunksize=64)
 
                     for key in ['detection_scores', 'detection_masks',
                                 'proposal_boxes', 'proposal_boxes_normalized',
