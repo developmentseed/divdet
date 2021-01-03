@@ -481,7 +481,8 @@ def proc_message(message, session):
         session.commit()
         elapsed_time = time.time() - start_time
         logging.info('Processing complete for %s.', {msg_dict["url"]})
-        logging.info('Total processing time: %s.', time.strftime('%H:%M:%S', elapsed_time))
+        logging.info('Total processing time: %s.',
+                     time.strftime('%H:%M:%S', time.gmtime(elapsed_time)))
     message.ack()
 
 
