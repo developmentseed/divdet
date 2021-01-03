@@ -298,7 +298,8 @@ def proc_message(message, session):
         logging.info('Downloading image: {}'.format(msg_dict['url']))
         image_fpath_orig = download_url_to_file(msg_dict['url'],
                                                 directory=tmp_dir)
-
+        logging.info('Updating acknowledgement deadline.')
+        message.modify_ack_deadline(600)
         '''
         if msg_dict['projection_url']:
             logging.info('Downloading projection.')
@@ -334,6 +335,8 @@ def proc_message(message, session):
 
             for scale in msg_dict['scales']:
                 logging.info('Processing at scale %s', scale)
+                logging.info('Updating acknowledgement deadline.')
+                message.modify_ack_deadline(600)
 
                 # Rescale image, round, and convert back to orig datatype
 
@@ -347,7 +350,8 @@ def proc_message(message, session):
                     min_window_overlap=(msg_dict['min_window_overlap'],
                                         msg_dict['min_window_overlap']))
 
-                logging.info('Created %s slices.', (len(slice_bounds)))
+                logging.info('Created %s slices. Running predictions at scale %s.',
+                            (len(slice_bounds)), scale)
                 slice_batch = windowed_reads_numpy(scaled_image, slice_bounds)
 
                 # Generate predictions
@@ -355,20 +359,16 @@ def proc_message(message, session):
                     pred_gen = pred_generator_batched(slice_batch,
                                                       msg_dict['prediction_endpoint'],
                                                       msg_dict['batch_size'])
-                    #pred_batch_multi = list(pred_gen)
                     pred_batch = [item for sublist in pred_gen for item in sublist]
-
-                    #flat_list = [item for sublist in regular_list for item in sublist]
-
                 else:
                     pred_gen = pred_generator(slice_batch,
                                               msg_dict['prediction_endpoint'])
                     pred_batch = list(pred_gen)
-
-
+                logging.info('Crater predictions at scale %s complete.', (scale))
 
                 # Convert predictions to polygon in orig image coordinate frame
-                for pred_set, slice_set in zip(pred_batch, slice_bounds):
+                for pred_set, slice_set in tqdm(zip(pred_batch, slice_bounds),
+                                                desc='\tConvert pred batch masks to polygons'):
                     y_offset_img = np.int(slice_set[0] / scale)
                     x_offset_img = np.int(slice_set[1] / scale)
 
@@ -418,7 +418,7 @@ def proc_message(message, session):
             #                                             max_output_size=len(preds))
 
             # Run non-max suppression that uses crater polygon mask
-            logging.info(f"Found {len(preds['polygons'])} polygon predictions.")
+            logging.info(f"Found {len(preds['polygons'])} polygon predictions. Starting NMS.")
             selected_inds = poly_non_max_suppression(preds['polygons'],
                                                      preds['detection_scores'],
                                                      mp_chunksize=64)
@@ -508,7 +508,7 @@ def main(_):
     session = _get_session(FLAGS.database_uri)
 
     # XXX To extend message processing beyond 10 mins, see https://github.com/googleapis/google-cloud-go/issues/608
-    debug_call_func = partial(proc_message_debug, session=session)
+    #debug_call_func = partial(proc_message_debug, session=session)
     call_func = partial(proc_message, session=session)
     subscriber.subscribe(subscription_path,
                          callback=call_func,
