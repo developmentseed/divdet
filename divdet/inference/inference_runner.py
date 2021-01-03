@@ -274,6 +274,7 @@ def proc_message_debug(message, session, endpoint=None):
 
 def proc_message(message, session):
     """Callback to  process an image"""
+    start_time = time.time()
     logging.info('\nReceived message: {}'.format(message.data))
     msg_dict = dict(message.attributes)
 
@@ -419,11 +420,6 @@ def proc_message(message, session):
             # Run non-max suppression to remove duplicates in multiple scales of one image
             logging.info('Running across-scale non-max suppression.')
 
-            # Non-max suppression for bounding boxes only
-            #selected_inds = tf.image.non_max_suppression(boxes, scores,
-            #                                             max_output_size=len(preds))
-
-            # Run non-max suppression that uses crater polygon mask
             logging.info(f"Found {len(preds['polygons'])} polygon predictions. Starting NMS.")
             # Non-max suppression for bounding boxes only
             selected_inds = tf.image.non_max_suppression(preds['proposal_boxes_normalized'],
@@ -431,6 +427,7 @@ def proc_message(message, session):
                                                          iou_threshold=0.5,
                                                          max_output_size=len(preds['detection_scores'])).numpy()
             '''
+            # Run non-max suppression that uses crater polygon mask
             selected_inds = poly_non_max_suppression(preds['polygons'],
                                                      preds['detection_scores'],
                                                      mp_chunksize=64)
@@ -449,6 +446,7 @@ def proc_message(message, session):
 
         ###########################
         # Save image and craters to DB
+        logging.info("Inserting %s polygon predictions.", len(preds['polygons']))
 
         # Save image first to get the image ID
         image_obj = Image(lon=msg_dict['center_longitude'],
@@ -478,7 +476,9 @@ def proc_message(message, session):
                                image_id=image_obj.id))
 
         session.commit()
-        logging.info(f'Processing complete for {image_fpath}.')
+        elapsed_time = time.time() - start_time
+        logging.info('Processing complete for %s.', {msg_dict["url"]})
+        logging.info('Total processing time: %s.', time.strftime('%H:%M:%S', elapsed_time))
     message.ack()
 
 
