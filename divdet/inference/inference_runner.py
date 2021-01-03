@@ -403,7 +403,7 @@ def proc_message(message, session):
                     selected_inds = tf.image.non_max_suppression(pred_set['proposal_boxes_normalized'],
                                                                  pred_set['detection_scores'],
                                                                  iou_threshold=0.5,
-                                                                 max_output_size=len(pred_set['detection_scores']))
+                                                                 max_output_size=len(pred_set['detection_scores'])).numpy()
 
                     for key in ['detection_scores', 'detection_masks',
                                 'proposal_boxes', 'proposal_boxes_normalized',
@@ -429,7 +429,7 @@ def proc_message(message, session):
             selected_inds = tf.image.non_max_suppression(preds['proposal_boxes_normalized'],
                                                          preds['detection_scores'],
                                                          iou_threshold=0.5,
-                                                         max_output_size=len(preds['detection_scores']))
+                                                         max_output_size=len(preds['detection_scores'])).numpy()
             '''
             selected_inds = poly_non_max_suppression(preds['polygons'],
                                                      preds['detection_scores'],
