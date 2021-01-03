@@ -394,10 +394,16 @@ def proc_message(message, session):
                         mask_poly = convert_mask_to_polygon(mask_arr, (x_offset, y_offset))
                         pred_set['polygons'].append(mask_poly)  # polygon in whole-image pixel coordinates
 
+                    '''
                     selected_inds = poly_non_max_suppression(pred_set['polygons'],
                                                              pred_set['detection_scores'],
                                                              mp_processes=None,
                                                              mp_chunksize=64)
+                    '''
+                    selected_inds = tf.image.non_max_suppression(pred_set['proposal_boxes_normalized'],
+                                                                 pred_set['detection_scores'],
+                                                                 iou_threshold=0.5,
+                                                                 max_output_size=len(pred_set))
 
                     for key in ['detection_scores', 'detection_masks',
                                 'proposal_boxes', 'proposal_boxes_normalized',
@@ -419,9 +425,16 @@ def proc_message(message, session):
 
             # Run non-max suppression that uses crater polygon mask
             logging.info(f"Found {len(preds['polygons'])} polygon predictions. Starting NMS.")
+            # Non-max suppression for bounding boxes only
+            selected_inds = tf.image.non_max_suppression(preds['proposal_boxes_normalized'],
+                                                         preds['detection_scores'],
+                                                         iou_threshold=0.5,
+                                                         max_output_size=len(preds))
+            '''
             selected_inds = poly_non_max_suppression(preds['polygons'],
                                                      preds['detection_scores'],
                                                      mp_chunksize=64)
+            '''
 
             # Select data from TF Serving column format
             for key in ['detection_scores', 'detection_masks', 'proposal_boxes',
