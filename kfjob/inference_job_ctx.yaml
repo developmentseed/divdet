@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inference-job-workqueue-ctx
+spec:
+  parallelism: 50
+  backoffLimit: 100000
+  template:
+    metadata:
+      name: inference-job-workqueue-ctx
+    spec:
+      serviceAccountName: ksa-cloud-sql-v1
+      restartPolicy: OnFailure
+      containers:
+      - name: sql
+        # It is recommended to use the latest version of the Cloud SQL proxy
+        # Make sure to update on a regular schedule!
+        image: gcr.io/cloudsql-docker/gce-proxy:1.17
+        command:
+          - "/cloud_sql_proxy"
+          - "-instances=divot-detect:us-east1:divdet-db-ctx-v1=tcp:5432"
+        securityContext:
+          runAsNonRoot: true
+        resources:
+          limits:
+            cpu: 1.5
+            memory: "24G"
+          requests:
+            cpu: 1
+            memory: "4G"
+
+      - name: runner
+        image: gcr.io/divot-detect/inference-pipeline-worker-ctx:v1
+        imagePullPolicy: Always  # Use this if image was reuploaded to GCR
+        env:
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: k8s-db-secret-ctx-v1
+              key: username
+        - name: DB_PASS
+          valueFrom:
+            secretKeyRef:
+              name: k8s-db-secret-ctx-v1
+              key: password
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: k8s-db-secret-ctx-v1
+              key: database
