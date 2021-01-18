@@ -430,7 +430,10 @@ def convert_mask_to_polygon(mask, xy_offset=(0, 0), simplify_tol=0.5,
     gdal_ring = ogr.Geometry(ogr.wkbLinearRing)
 
     if len(contours) > 1:
-        raise RuntimeError('Found multiple mask contours for 1 crater.')
+        lens = [len(cont) for cont in contours]
+        argmax = np.argmax(lens)
+        contours = [contours[argmax]]
+        logging.warning(f'Found multiple mask contours for 1 crater, selecting ind {argmax}.')
 
     # Remove the padding and transition from (row, col) to (x, y)
     contour = np.fliplr(contours[0] - 1)
