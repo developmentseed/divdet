@@ -4,6 +4,7 @@ Construct a set of messages for Google PubSub from a CSV
 import csv
 from copy import copy
 
+import numpy as np
 from absl import logging, app, flags
 from tqdm import tqdm
 
@@ -14,7 +15,7 @@ flags.DEFINE_string('input_data_fpath', None, 'Filepath of input CSV containing 
 flags.DEFINE_string('output_message_fpath', None, 'Filepath of output CSV that will have messages for pushing to PubSub.')
 
 flags.DEFINE_string('csv_url_key', 'pds_jp2_url', 'Key to use to extract image URL from a CSV')
-flags.DEFINE_string('csv_product_id_key', 'product_id', 'Key to use to extract image ID from a CSV')
+flags.DEFINE_string('csv_product_id_key', 'pds_id', 'Key to use to extract image ID from a CSV')
 flags.DEFINE_string('csv_version_id_key', None, 'Key to use to extract image version from a CSV')
 flags.DEFINE_string('csv_volume_id_key', None, 'Key to use to extract image volume ID from a CSV')
 flags.DEFINE_string('csv_lon_key', 'center_latitude', 'Key to use to extract image latitude from a CSV')
@@ -31,6 +32,7 @@ flags.DEFINE_integer('window_size', 1024, 'Size of one side of a square to use f
 flags.DEFINE_integer('min_window_overlap', 256, 'Number of pixels to overlap between windows.')
 flags.DEFINE_string('prediction_endpoint', 'http://localhost:8501/v1/models/divdet-inference:predict', 'Path to send images to for prediction.')
 flags.DEFINE_bool('center_reproject', False, 'Whether or not to center reproject the image.')
+flags.DEFINE_float('latitude_threshold', 91, 'Maximum absolute latitude allowed.')
 
 
 def main(_):
@@ -48,24 +50,19 @@ def main(_):
     row_data = []
     with open(FLAGS.input_data_fpath, 'r') as image_data_csv:
         csv_reader = csv.DictReader(image_data_csv)
-        for row in tqdm(csv_reader, desc='Creating PubSub messages'):
+        row_count = 0
+        for row in tqdm(csv_reader, desc='Reading CSV rows'):
+
+            # If latitude is too large, skip message
+            if np.abs(float(row[FLAGS.csv_lat_key])) > FLAGS.latitude_threshold:
+                continue
+
             temp_dict = {}
             for key in message_keys:
                 temp_dict[fdict[key]] = row[fdict[key]]
             row_data.append(temp_dict)
 
-            '''
-            row_data.append(dict(image_url=row[FLAGS.csv_url_key],
-                                 product_id=row[FLAGS.csv_product_id_key],
-                                 version_id=row.get(FLAGS.csv_version_id_key),
-                                 center_lat=row[FLAGS.csv_lat_key],
-                                 center_lon=row[FLAGS.csv_lon_key],
-                                 instrument=row[FLAGS.csv_instrument_key],
-                                 instrument_host=row[FLAGS.csv_instrument_host_key],
-                                 projection_url=row[FLAGS.csv_projection_url_key],
-                                 sub_solar_azimuth=row[FLAGS.csv_sub_solar_azimuth_key]))
-            '''
-
+            row_count += 1
 
     with open(FLAGS.output_message_fpath, 'w') as message_csv:
         # Unpack all key names
@@ -77,6 +74,7 @@ def main(_):
         for temp_dict in row_data:
             temp_dict.update(batch_info)
             csv_writer.writerow(temp_dict)
+        logging.info(f'Saved info for {len(row_data)} images to {FLAGS.output_message_fpath}.')
 
 if __name__ == "__main__":
     app.run(main)

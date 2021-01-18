@@ -20,10 +20,10 @@ def main(_):
         for row in tqdm(csv_reader, desc='Reading original CTX data'):
             temp_dict = row.copy()
             temp_dict['url'] = (f'https://image.mars.asu.edu/stream/'
-                                f'{temp_dict["product_id"]}.tiff?'
+                                f'{temp_dict["pds_id"]}.tiff?'
                                 f'image=/mars/images/ctx/'
                                 f'{temp_dict["volume_id"]}/prj_full/'
-                                f'{temp_dict["product_id"]}.tiff')
+                                f'{temp_dict["pds_id"]}.tiff')
             all_row_data.append(temp_dict)
 
     with open(FLAGS.output_data_fpath, 'w') as image_data_csv:
