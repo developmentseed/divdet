@@ -1,0 +1,32 @@
+#FROM python:3.7-buster
+FROM osgeo/gdal:ubuntu-full-3.0.4
+
+WORKDIR /app
+
+RUN apt-get update && apt-get upgrade -y
+RUN apt-get install wget python3-pip python-dev libpq-dev -y
+
+# Add source code
+COPY divdet/*.py ./divdet/
+COPY divdet/inference/*.py ./divdet/inference/
+COPY requirements.txt .
+COPY setup.py .
+COPY kfjob/start_nac.sh ./start.sh
+RUN chmod +x start.sh
+
+RUN wget https://dl.google.com/cloudsql/cloud_sql_proxy.linux.amd64 -O cloud_sql_proxy
+RUN chmod +x cloud_sql_proxy
+
+#RUN apt-get install gdal-bin libgdal-dev -y
+#ENV CPLUS_INCLUDE_PATH=/usr/include/gdal
+#ENV C_INCLUDE_PATH=/usr/include/gdal
+ENV TMPDIR=/tmp
+ENV CUDA_VISIBLE_DEVICES=-1
+
+
+# Install everything via pip
+RUN pip3 install --upgrade pip && \
+    pip3 install -r requirements.txt && \
+    pip3 install -e .
+
+CMD ./start.sh
