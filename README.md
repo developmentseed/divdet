@@ -5,17 +5,17 @@ Autonomous crater mapping on Mars
 The aim is to create and apply an ML model capable of detecting and outlining craters on Mars. Crater mapping is important for a number of reasons including: 
 1) mapping terrain for eventual human exploration
 2) dating geological features, 
-3) acting as a way to geolocate on a planet (since Mars doesn't have GPS satellites), and 
-4) looking for liquid water in newly exposed craters. Most places on Mars [suspected of having liquid water](https://en.wikipedia.org/wiki/Seasonal_flows_on_warm_Martian_slopes) occur on crater walls or gully walls.
+3) acting as a way to geolocate on a planet (since we don't yet have GPS-providing satellites), and 
+4) monitoring for new craters. Most places on Mars [suspected of having liquid water](https://en.wikipedia.org/wiki/Seasonal_flows_on_warm_Martian_slopes) occur on crater walls or gully walls.
 
-After training a model to find craters in imagery, the goal is to apply that model to both Mars and the Moon. After mapping craters, these results will be uploaded into Arizona State University's [JMARS](https://jmars.asu.edu/) platform for public use.
+After training a model to find craters in imagery, the goal is to apply that model to both Mars and the Moon. Once mapping is complete, these results will be uploaded into Arizona State University's [JMARS](https://jmars.asu.edu/) platform for public use.
 
-The rest of this README describes how to train and deploy ML models for crater mapping. It assumes reasonable experience with ML and cloud infrastructure tools. 
+The rest of this README describes how to train and deploy ML models for crater mapping. It assumes reasonable experience with ML and cloud infrastructure tools (including Google Cloud Platform, Kubernetes, and Kubeflow).
 
 ## Model Training
-This repo relies on the [Tensorflow Object Detection API](https://github.com/tensorflow/models/tree/master/research/object_detection) to train models. TF's OD API allows relatively quick training of object detection and instance segmentation models. It supports a [wide variety](https://github.com/tensorflow/models/blob/master/research/object_detection/g3doc/detection_model_zoo.md) of architectures. Limitations include the fact that it's still limited to TF v1.x (as of Jan 2020) and doesn't support multi-GPU training.
+This repo relies on the [Tensorflow Object Detection API](https://github.com/tensorflow/models/tree/master/research/object_detection) to train models. TF's OD API allows relatively quick training of object detection and instance segmentation models. It supports a [wide variety](https://github.com/tensorflow/models/blob/master/research/object_detection/g3doc/detection_model_zoo.md) of architectures.
 
-Our data comes from the Mars Reconnaissance Orbiter's (MRO) Context camera (CTX) as well as the Lunar Reconnaissance Orbiter Camera (LROC) and is best obtained through NASA's [PDS Image Atlas](https://pds-imaging.jpl.nasa.gov/search/). The [DREAMS lab](https://web.asu.edu/jdas/home) led by Prof. Jnaneshwar "JD" Das is spearheading the labeling effort using their [DeepGIS](https://github.com/DREAMS-lab/deepgis) tool.
+Our data comes from the Mars Reconnaissance Orbiter's (MRO) as well as the Lunar Reconnaissance Orbiter Camera (LROC) and is best obtained through NASA's [PDS Image Atlas](https://pds-imaging.jpl.nasa.gov/search/). The [DREAMS lab](https://web.asu.edu/jdas/home) led by Prof. Jnaneshwar "JD" Das is spearheading the labeling effort using their [DeepGIS](https://github.com/DREAMS-lab/deepgis) tool.
 
 Model training relies on the [Kubeflow Pipelines](https://www.kubeflow.org/docs/pipelines/) tool.
 
@@ -24,7 +24,7 @@ After training, the model will detect craters for both Martian and Lunar imagery
 
 # Technical Training Notes
 
-_The below walks through model training on Kubeflow._
+_The below walks through model training on Kubeflow. See `divdet/docs/STTR_TrainingSoftwareGuide.pdf` for more details and tips._
 
 ## Build OD API training Docker image
 Before running the below, update paths in the `build_image.sh` shell script to match your desired image file location. Also update `od_export/component.yaml` and `od_train/component.yaml` to match the location of this image.
@@ -32,102 +32,83 @@ Before running the below, update paths in the `build_image.sh` shell script to m
 export BUILDS_DIR=<path_containing_divdet_directory>
 ./$BUILDS_DIR/divdet/kfpipelines/components/od_train/build_image.sh
 ```
-## Setup Kubeflow Control (`kfctl`) CLI tool
 
-KFCtl makes it easy to deploy KubeFlow on a kubernetes cluster
+## Setup Kubeflow 
+Full instructions for setting up the Kubeflow cluster can be found within Kubeflow's documentation [here](https://www.kubeflow.org/docs/gke/deploy/). The two more important steps are described in detail below.
 
-```bash
-# Setup as below or download directly from (1) https://github.com/kubeflow/kubeflow/releases or (2) https://github.com/kubeflow/kfctl/releases and place the binary file in ~/.kfctl
-export KUBEFLOW_BRANCH=1.0.2
-export KUBEFLOW_TAG=1.0.2-0-ga476281
-export PLATFORM=darwin  # Use `darwin` on Mac. Other option is `linux`
-wget -P /tmp https://github.com/kubeflow/kfctl/releases/download/v${KUBEFLOW_BRANCH}/kfctl_v${KUBEFLOW_TAG}_${PLATFORM}.tar.gz
-mkdir ~/.kfctl
-tar -xvf /tmp/kfctl_v${KUBEFLOW_TAG}_${PLATFORM}.tar.gz -C ${HOME}/.kfctl
+### Create management cluster
+The management cluster helps setup instances of Kubeflow. Full setup instructions [here](https://www.kubeflow.org/docs/gke/deploy/management-setup/).
+
+Example values for management cluster Makefile:
 ```
 
-## Setup Kubeflow on GCP cluster
-```bash
-# Add kfctl tool to PATH
-export PATH=$PATH:${HOME}/.kfctl
+	kpt cfg set ./instance mgmt-ctxt management-cluster
 
-# Set GCP creds
-export CLIENT_ID=<my_client_id>
-export CLIENT_SECRET=<my_client_secret>
-#export KFCTL_DEPLOYMENT=kfctl_gcp_iap.v0.7.1.yaml
-export KFCTL_DEPLOYMENT=kfctl_gcp_iap.v1.0.2.yaml
-export CONFIG_URI="https://raw.githubusercontent.com/kubeflow/manifests/v1.0-branch/kfdef/${KFCTL_DEPLOYMENT}"
+	kpt cfg set ./upstream/manifests/gcp name kubeflow-app-v5
+	kpt cfg set ./upstream/manifests/gcp gcloud.core.project divot-detect
+	kpt cfg set ./upstream/manifests/gcp gcloud.compute.zone us-east1-c
+	kpt cfg set ./upstream/manifests/gcp location us-east1-c
+	kpt cfg set ./upstream/manifests/gcp log-firewalls false
 
-# Set GCP project vars
+	kpt cfg set ./upstream/manifests/stacks/gcp name kubeflow-app-v5
+	kpt cfg set ./upstream/manifests/stacks/gcp gcloud.core.project divot-detect
+
+	kpt cfg set ./instance name kubeflow-app-v5
+	kpt cfg set ./instance location us-east1-c
+	kpt cfg set ./instance gcloud.core.project divot-detect
+	kpt cfg set ./instance email wronk@developmentseed.org
+```
+
+### Create management cluster
+To deploy an instance of Kubeflow, see the guide [here](https://www.kubeflow.org/docs/gke/deploy/deploy-cli/).
+
+```
+export MGMTCTXT=management-cluster
 export PROJECT=divot-detect
+export KF_NAME=kubeflow-app-v5
 export ZONE=us-east1-c
-# KF_NAME can't be a full directory path, just a directory name
-# Increment the version for each cluster you create. Otherwise, the cluster may have issues deploying if you delete the cluster storage
-export KF_NAME=kubeflow-app-v31
 
-# Set local deployment directory
-export BASE_DIR=${BUILDS_DIR}/divdet
-export KF_DIR=${BASE_DIR}/${KF_NAME}
+kubectl config use-context ${MGMTCTXT}
+kubectl create namespace ${PROJECT}
+kubectl config set-context --current --namespace ${PROJECT}
 
-# Create directory of configuration files
-gcloud config set project ${PROJECT}
-mkdir -p ${KF_DIR}
-cd ${KF_DIR}
-kfctl build -V -f ${CONFIG_URI}
-
-# Make some changes to your GCP config if necessary (here, turning down master resources. We'll create our own pre-emptible GPU pool)
-# `brew install yq` if you don't have it installed
-export GCP_CONFIG_FILE=${KF_DIR}/gcp_config/cluster-kubeflow.yaml
-yq w -i ${GCP_CONFIG_FILE} resources[0].properties.cpu-pool-enable-autoscaling false
-yq w -i ${GCP_CONFIG_FILE} resources[0].properties.gpu-pool-enable-autoscaling false
-yq w -i ${GCP_CONFIG_FILE} resources[0].properties.gpu-pool-max-nodes 1
-yq w -i ${GCP_CONFIG_FILE} resources[0].properties.cpu-pool-machine-type n1-standard-4
-#yq w -i ${GCP_CONFIG_FILE} resources[0].properties.cpu-pool-disk-size 100GB
-yq w -i ${GCP_CONFIG_FILE} resources[0].properties.autoprovisioning-config.enabled false
-
-# Update the Google service account to have access to cloud storage
-export IAM_CONFIG_FILE=${KF_DIR}/gcp_config/iam_bindings.yaml
-yq w -i ${IAM_CONFIG_FILE} bindings[2].roles[3] roles/storage.admin
-
-# Deploy to GCP
-export CONFIG_FILE=${KF_DIR}/${KFCTL_DEPLOYMENT}
-kfctl apply -V -f ${CONFIG_FILE}
+export CLIENT_ID=<your_client_id>
+export CLIENT_SECRET=<your_client_secret>
+make set-values
+make apply
 ```
 
-## Update permissions to grant access needed for resources to function
-```bash
-gcloud projects add-iam-policy-binding ${PROJECT} \
---member serviceAccount:${KF_NAME}-user@${PROJECT}.iam.gserviceaccount.com \
---role roles/storage.objectAdmin \
---role roles/logging.logWriter \
---role roles/monitoring.editor
-
-gcloud projects add-iam-policy-binding ${PROJECT} \
---member serviceAccount:${KF_NAME}-vm@${PROJECT}.iam.gserviceaccount.com \
---role roles/storage.objectAdmin \
---role roles/viewer
+After cluster setup is complete:
 ```
-
-## Add a nodepool (to start instance that will actually run ML)
-```bash
-gcloud container node-pools create gpu-node-pool \
---cluster ${KF_NAME} \
---zone ${ZONE} \
---num-nodes 1 \
---enable-autoscaling --min-nodes=0 --max-nodes=1 \
---machine-type n1-highmem-8 \
---scopes cloud-platform --verbosity error \
---accelerator=type=nvidia-tesla-k80,count=1 \
---service-account ${KF_NAME}-user@${PROJECT}.iam.gserviceaccount.com \
---node-taints mlUseOnly=true:NoSchedule 
-#--preemptible
-```
-## Verifying resources
-This connects kubectl to your cluster.
-
-```
+# Verify cluster
 gcloud container clusters get-credentials ${KF_NAME} --zone ${ZONE} --project ${PROJECT}
 kubectl -n kubeflow get all
+
+gcloud projects add-iam-policy-binding divot-detect --member=user:wronk@developmentseed.org --role=roles/iap.httpsResourceAccessor
+
+# URI information
+kubectl -n istio-system get ingress
+export HOST=$(kubectl -n istio-system get ingress envoy-ingress -o=jsonpath={.spec.rules[0].host})
+
+# After model training is initiated
+tensorboard --logdir=gs://divot-detect/experiments/27/train
+```
+
+Add GPUs to the cluster
+```
+export GPU_POOL_NAME=gpu-pool
+gcloud container node-pools create ${GPU_POOL_NAME} \
+--accelerator type=nvidia-tesla-p100,count=1 \
+--zone ${ZONE} --cluster ${KF_NAME} \
+--num-nodes=1 \
+--machine-type=n1-standard-16 \
+--min-nodes=0 \
+--max-nodes=1 \
+--enable-autoscaling \
+--node-taints mlUseOnly=true:NoSchedule \
+--disk-size 20GB
+
+kubectl apply -f https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/master/nvidia-driver-installer/cos/daemonset-preloaded.yaml
 ```
 
 ## Run the TF OD API pipeline
@@ -136,13 +117,11 @@ kubectl -n kubeflow get all
 
 ## Building Kubeflow Pipeline
 ```python
-python divdet/kfpipelines/tf_od_pipeline_v1.py
+python divdet/kfpipelines/tf_od_pipeline_v3.py
 ```
 
 ## Launching Kubeflow Pipeline
 See `divdet/docs/README.md` for a more detailed walkthrough on this section.
-
-Then open up the Kubeflow UI by looking in GKE > Services & Ingress. It should be something like `https://kubeflow-app-vX.endpoints.divot-detect.cloud.goog/`. Note that the  take 5-10 minutes to come online _after_ the cluster is completely ready (so be patient if you're getting `This site can’t be reached` or `This site can’t provide a secure connection` messages). Go to the Pipelines tab and upload the .tar.gz file to the Kubeflow Pipelines UI and kick off a run. 
 
 Reasonable defaults/examples for pipeline parameters:
 
@@ -150,24 +129,113 @@ Reasonable defaults/examples for pipeline parameters:
 | ------------- | ------------- |
 | pipeline_config_path | `gs://divot-detect/model_dev/model_templates/mask_rcnn_coco_v1.config` |
 | model_dir | `gs://divot-detect/experiments/1` |
-| num_train_steps | `200000` |
+| num_train_steps | `50000` |
 | sample_1_of_n_eval_examples | `10` |
 | eval_checkpoint_metric | `loss` |
 | metric_objective_type | `min` |
 | inference_input_type | `encoded_image_string_tensor` |
-| inference_output_directory | `gs://divot-detect/model_export/od1/001` |
+| inference_output_directory | `gs://divot-detect/model_export/od1/1` |
 
 ## Clean up
 ```bash
-# Delete cluster/resources once finished. You can skip deleting the storage if you want to rerun the same cluster later
-kfctl delete -f ${CONFIG_FILE} --delete_storage
+kubectl delete namespace kubeflow
 
-gcloud compute backend-services list
-gcloud compute backend-services delete <name> --global
+cd "${KF_DIR}"
+make delete-gcp
 
 # Make sure disks are deleted under Compute Engine > Disks
 ```
 
-# Technical Deployment Notes
 
-_To be updated as code is developed._
+# Technical Inference Notes
+_The below walks through inference using Kubernetes. See `divdet/docs/STTR_InferenceSoftwareGuide.pdf` for more details and tips._
+
+
+## Create the user and database, change connection, add and verify postgis
+We have used Google Cloud's SQL API to create and run a Postgres database with the PostGIS extension. However, this could be run locally or on other platforms as well. Just make sure the IP address of the database is accessible by the compute resources of your inference pipeline.
+
+```bash
+\q  # if logged in to postgres user
+dropdb craters_ctx_v1  # Or `DROP DATABASE craters_ctx_v1;` if logged in
+psql -d postgres;
+CREATE DATABASE craters_ctx_v1 OWNER postgres;
+GRANT ALL PRIVILEGES ON DATABASE craters_ctx_v1 TO postgres;
+
+\c craters_ctx_v1 postgres
+\du+
+
+# Add and check PostGIS extension
+create extension postgis;
+SELECT srid, auth_name, proj4text FROM spatial_ref_sys LIMIT 10;
+```
+
+## Push messages to PubSub
+```
+# First modify the raw image metadata to prep for message creation
+python /Users/wronk/Builds/divdet/divdet/inference/ctx_message_augment.py \
+--input_data_fpath /Users/wronk/Data/divot_detect/ctx.csv \  					# Path to CTX image list containing all image metadata
+--output_data_fpath /Users/wronk/Data/divot_detect/ctx_augmented.csv 			# Path to output CSV containing desired/augmented metadata
+
+# Modify the below parameters to your liking. This will generate messages for PubSub
+# See script for help messages on each CLI flag
+python /Users/wronk/Builds/divdet/divdet/inference/create_messages.py \
+--input_data_fpath /Users/wronk/Data/divot_detect/ctx_augmented.csv \
+--output_message_fpath /Users/wronk/Data/divot_detect/ctx_messages.csv \
+--csv_url_key=url \
+--csv_volume_id_key=volume_id \
+--csv_lon_key=center_longitude \
+--csv_lat_key=center_latitude \
+--csv_instrument_host_key=instrument_id \
+--csv_sub_solar_azimuth_key=sub_solar_azimuth \
+--prediction_endpoint=<your_prediction_endpoint_IP_address> \
+--scales="[0.5, 0.25, 0.125]" \
+--batch_size=2 \
+--min_window_overlap=128 \
+--center_reproject=False \
+--latitude_threshold=15
+
+# Push messages to PubSub
+python pubsub_push_v1.py \
+--input_fpath /Users/wronk/Data/divot_detect/ctx_messages.csv \
+--gcp_project divot-detect \
+--pubsub_topic_name divot-detect-ctx \
+--pubsub_subscription_name divot-detect-ctx \
+--service_account_fpath <Path_to_your_service_account>
+```
+
+## Prepare the inference pipeline parameters
+
+First update the parameters for the following files:
+* inference_gpu_pool.yaml
+* inference_job_ctx.yaml
+* start_ctx.sh
+* service_account.yaml
+
+Basic descriptions are in divdet/kfjobs/README.md
+
+Then build the Docker image that will serve as a worker template:
+```
+docker build --no-cache -t "gcr.io/<your_project_name>/inference-pipeline-worker-ctx:v1" -f Dockerfile_inference_runner_ctx_v1 .
+docker push gcr.io/<your_project_name>/inference-pipeline-worker-ctx:v1
+```
+
+## Launch the inference pipeline
+
+```bash
+cd divdet/kfjob
+
+# Initialize the cluster with nodes and add a GPU pool K8s deployment
+./cluster_initializer.sh
+
+# modify the below Kubernetes secret, which contains DB connnection information
+kubectl create secret generic k8s-db-secret-ctx-v1 \
+--from-literal=username=<enter_your_DB_username> \
+--from-literal=password=<enter_your_DB_username> \
+--from-literal=database=<enter_your_DB_name>
+
+# Launch the inference workers
+kubectl create -f /Users/wronk/Builds/divdet/kfjob/inference_job_ctx.yaml
+```
+
+You can now view your status on the GKE landing page, watch message processing rates on PubSub, and check DB usage (if using Google's SQL API).
+
