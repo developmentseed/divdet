@@ -146,6 +146,30 @@ make delete-gcp
 # Make sure disks are deleted under Compute Engine > Disks
 ```
 
+## Create Servable
+After downloading the saved model files from the Kubeflow Pipeline output, create a TF Serving image that wraps your saved model as below:
+
+```bash
+cd /Users/wronk/Builds/models/research/object_detection
+export MODEL_DIR="<path_to_model_dir>"
+export PYTHONPATH=$PYTHONPATH:/Users/wronk/Builds/models/research:/Users/wronk/Builds/models/research/slim
+
+python exporter_main_v2.py \
+--input_type encoded_image_string_tensor \
+--pipeline_config_path ${PIPELINE_CONFIG_PATH} \
+--trained_checkpoint_dir ${MODEL_DIR}/01 \
+--output_directory ${MODEL_DIR}/01/export \
+--config_override " \
+            model{ \
+              faster_rcnn { \
+                second_stage_post_processing { \
+                  batch_non_max_suppression { \
+                    score_threshold: 0.25 \
+                  } \
+                } \
+              } \
+            }"
+```
 
 # Technical Inference Notes
 _The below walks through inference using Kubernetes. See `divdet/docs/STTR_InferenceSoftwareGuide.pdf` for more details and tips._
@@ -238,4 +262,3 @@ kubectl create -f /Users/wronk/Builds/divdet/kfjob/inference_job_ctx.yaml
 ```
 
 You can now view your status on the GKE landing page, watch message processing rates on PubSub, and check DB usage (if using Google's SQL API).
-
