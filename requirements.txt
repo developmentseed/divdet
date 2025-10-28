@@ -11,4 +11,4 @@ psycopg2
 jupyter
 google-cloud-pubsub
 google-auth
-pg8000==1.16.5
+pg8000==1.31.5
